@@ -16,6 +16,7 @@ import os
 import sys
 import base64
 import time
+import yaml
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Optional
@@ -35,10 +36,20 @@ BANNER = r"""
         			https://fofa.info
 """
 
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RED = "\033[91m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
+
+def highlight(text: str, value: str) -> str:
+    return f"{text}: {BOLD}{value}{RESET}"
+
 
 # ============ 配置相关 ============
 
-CONFIG_FILE = Path(__file__).parent / "config.json"
+CONFIG_FILE = Path(__file__).parent / "config.yaml"
 
 
 @dataclass
@@ -53,11 +64,11 @@ class Config:
 
         if CONFIG_FILE.exists():
             try:
-                data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+                data = yaml.safe_load(CONFIG_FILE.read_text(encoding="utf-8")) or {}
                 config.url = data.get("url", "")
                 config.key = data.get("key", "")
             except Exception as e:
-                print(f"[警告] 读取 config.json 失败: {e}", file=sys.stderr)
+                print(f"[警告] 读取 config.yaml 失败: {e}", file=sys.stderr)
 
         return config
 
@@ -72,15 +83,14 @@ def ensure_config_exists() -> bool:
     if CONFIG_FILE.exists():
         return True
 
-    # 自动生成默认配置文件
     default_config = {
-        "url": "https://fofa.info",
+        "url": "https://fofa.icu",
         "key": "your-fofa-key-here"
     }
 
     try:
         CONFIG_FILE.write_text(
-            json.dumps(default_config, ensure_ascii=False, indent=4),
+            yaml.dump(default_config, allow_unicode=True, default_flow_style=False),
             encoding="utf-8"
         )
         print(f"[*] 已自动生成配置文件: {CONFIG_FILE}")
@@ -340,11 +350,10 @@ def main():
         client = FofaClient(config.url, config.key)
         user_info = client.get_usage()
         if user_info:
-            print(f"[*] 用户: {user_info.get('username', 'N/A')}")
-            print(f"[*] 套餐: {user_info.get('vip_level', 'N/A')}")
-            print(f"[*] 剩余积分: {user_info.get('remain_points', 'N/A')}")
-            print(f"[*] 今日已用: {user_info.get('daily_used', 'N/A')}")
-            print(f"[*] 今日限额: {user_info.get('daily_limit', 'N/A')}")
+            print(highlight("[*] 用户", user_info.get('username', 'N/A')))
+            print(highlight("[*] 套餐", user_info.get('vip_level', 'N/A')))
+            print(highlight(f"{RED}[*] 剩余查询{RESET}", user_info.get('remain_api_query', 'N/A')))
+            print(highlight("[*] 过期时间", user_info.get('expiration', 'N/A')))
             print()
     except FofaAPIError as e:
         print(f"[!] 用量检查失败: {e}", file=sys.stderr)
