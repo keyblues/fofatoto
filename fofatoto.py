@@ -351,7 +351,7 @@ def main():
         if user_info:
             is_vip = user_info.get('isvip', False)
             vip_status = f"{GREEN}正常{RESET}" if is_vip else f"{RED}无效{RESET}"
-            print(highlight("[*] 用户", user_info.get('username', 'N/A')))
+            print(highlight("[*] 服务器", f"{GREEN}正常{RESET}" if user_info.get('fofa_server') else f"{RED}异常{RESET}"))
             print(highlight("[*] Key状态", vip_status))
             print(highlight(f"{RED}[*] 剩余查询{RESET}", user_info.get('remain_api_query', 'N/A')))
             print(highlight("[*] 过期时间", user_info.get('expiration', 'N/A')))
