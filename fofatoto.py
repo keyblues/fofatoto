@@ -349,10 +349,13 @@ def main():
         client = FofaClient(config.url, config.key)
         user_info = client.get_usage()
         if user_info:
+            is_vip = user_info.get('isvip', False)
+            vip_status = f"{GREEN}正常{RESET}" if is_vip else f"{RED}无效{RESET}"
             print(highlight("[*] 用户", user_info.get('username', 'N/A')))
-            print(highlight("[*] 套餐", user_info.get('vip_level', 'N/A')))
+            print(highlight("[*] Key状态", vip_status))
             print(highlight(f"{RED}[*] 剩余查询{RESET}", user_info.get('remain_api_query', 'N/A')))
             print(highlight("[*] 过期时间", user_info.get('expiration', 'N/A')))
+            print(highlight("[*] VIP等级", user_info.get('vip_level', 'N/A')))
             print()
     except FofaAPIError as e:
         print(f"[!] 用量检查失败: {e}", file=sys.stderr)
