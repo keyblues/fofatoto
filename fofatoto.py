@@ -16,7 +16,6 @@ import os
 import sys
 import base64
 import time
-import yaml
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Optional
@@ -49,7 +48,7 @@ def highlight(text: str, value: str) -> str:
 
 # ============ 配置相关 ============
 
-CONFIG_FILE = Path(__file__).parent / "config.yaml"
+CONFIG_FILE = Path(__file__).parent / "config.json"
 
 
 @dataclass
@@ -64,11 +63,11 @@ class Config:
 
         if CONFIG_FILE.exists():
             try:
-                data = yaml.safe_load(CONFIG_FILE.read_text(encoding="utf-8")) or {}
+                data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
                 config.url = data.get("url", "")
                 config.key = data.get("key", "")
             except Exception as e:
-                print(f"[警告] 读取 config.yaml 失败: {e}", file=sys.stderr)
+                print(f"[警告] 读取 config.json 失败: {e}", file=sys.stderr)
 
         return config
 
@@ -90,7 +89,7 @@ def ensure_config_exists() -> bool:
 
     try:
         CONFIG_FILE.write_text(
-            yaml.dump(default_config, allow_unicode=True, default_flow_style=False),
+            json.dumps(default_config, ensure_ascii=False, indent=4),
             encoding="utf-8"
         )
         print(f"[*] 已自动生成配置文件: {CONFIG_FILE}")
