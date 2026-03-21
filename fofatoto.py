@@ -317,7 +317,29 @@ def export_json(results: list[FofaResult], output_path: Path) -> int:
 
 # ============ 主函数 ============
 
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="FOFA 查询工具",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument("query", nargs="?", help="FOFA 查询语句，如: domain=baidu.com")
+    parser.add_argument("-o", "--output", help="输出文件名（不含后缀），默认为 fofa_results", default="fofa_results")
+    parser.add_argument("-l", "--limit", type=int, help="最大返回数量，默认 100", default=100)
+    parser.add_argument("-a", "--all", action="store_true", help="查询所有结果（可能很慢）")
+    parser.add_argument("--csv", action="store_true", help="导出 CSV 格式")
+    parser.add_argument("--txt", action="store_true", help="导出 TXT 格式（URL 列表）")
+    parser.add_argument("--json", action="store_true", help="导出 JSON 格式")
+    parser.add_argument("-v", "--verbose", action="store_true", help="显示详细信息")
+    return parser
+
+
 def main():
+    # 检查是否显示帮助
+    if "-h" in sys.argv or "--help" in sys.argv:
+        build_parser().print_help()
+        sys.exit(0)
+
     # 自动检测并生成配置文件
     if not ensure_config_exists():
         sys.exit(1)
@@ -350,59 +372,7 @@ def main():
     except FofaAPIError as e:
         print(f"[!] 用量检查失败: {e}", file=sys.stderr)
 
-    parser = argparse.ArgumentParser(
-        description="FOFA 查询工具",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-
-    # 查询语句（位置参数）
-    parser.add_argument("query", nargs="?", help="FOFA 查询语句，如: domain=baidu.com")
-
-    # 输出相关
-    parser.add_argument(
-        "-o", "--output",
-        help="输出文件名（不含后缀），默认为 fofa_results",
-        default="fofa_results"
-    )
-
-    # 数量限制
-    parser.add_argument(
-        "-l", "--limit",
-        type=int,
-        help="最大返回数量，默认 100",
-        default=100
-    )
-    parser.add_argument(
-        "-a", "--all",
-        action="store_true",
-        help="查询所有结果（可能很慢）",
-    )
-
-    # 输出格式
-    parser.add_argument(
-        "--csv",
-        action="store_true",
-        help="导出 CSV 格式",
-    )
-    parser.add_argument(
-        "--txt",
-        action="store_true",
-        help="导出 TXT 格式（URL 列表）",
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="导出 JSON 格式",
-    )
-
-    # 其他
-    parser.add_argument(
-        "-v", "--verbose",
-        action="store_true",
-        help="显示详细信息",
-    )
-
+    parser = build_parser()
     args = parser.parse_args()
 
     # 如果没有指定格式，默认全部导出
