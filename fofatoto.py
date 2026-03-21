@@ -281,6 +281,21 @@ def export_csv(results: list[FofaResult], output_path: Path) -> int:
     return len(results)
 
 
+def unique_path(path: Path) -> Path:
+    """如果文件存在，自动重命名"""
+    if not path.exists():
+        return path
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    n = 1
+    while True:
+        new_path = parent / f"{stem}_{n}{suffix}"
+        if not new_path.exists():
+            return new_path
+        n += 1
+
+
 def export_txt(results: list[FofaResult], output_path: Path) -> int:
     """导出为 TXT 文件（URL 列表）"""
     if not results:
@@ -411,19 +426,19 @@ def main():
         exported = 0
 
         if args.csv:
-            csv_path = output_path.with_suffix(".csv")
+            csv_path = unique_path(output_path.with_suffix(".csv"))
             count = export_csv(results, csv_path)
             print(f"[+] 已导出 CSV: {csv_path} ({count} 条)")
             exported += 1
 
         if args.txt:
-            txt_path = output_path.with_suffix(".txt")
+            txt_path = unique_path(output_path.with_suffix(".txt"))
             count = export_txt(results, txt_path)
             print(f"[+] 已导出 TXT: {txt_path} ({count} 条)")
             exported += 1
 
         if args.json:
-            json_path = output_path.with_suffix(".json")
+            json_path = unique_path(output_path.with_suffix(".json"))
             count = export_json(results, json_path)
             print(f"[+] 已导出 JSON: {json_path} ({count} 条)")
             exported += 1
