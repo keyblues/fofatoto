@@ -346,9 +346,9 @@ def build_parser():
     parser.add_argument("-o", "--output", help="输出文件名（不含后缀），默认为 fofa_results", default="fofa_results")
     parser.add_argument("-l", "--limit", type=int, help="最大返回数量，默认 100", default=100)
     parser.add_argument("-a", "--all", action="store_true", help="查询所有结果（可能很慢）")
-    parser.add_argument("--csv", action="store_true", help="导出 CSV 格式")
-    parser.add_argument("--txt", action="store_true", help="导出 TXT 格式（URL 列表）")
-    parser.add_argument("--json", action="store_true", help="导出 JSON 格式")
+    parser.add_argument("-csv", action="store_true", help="导出 CSV 格式")
+    parser.add_argument("-txt", action="store_true", help="导出 TXT 格式（URL 列表）")
+    parser.add_argument("-json", action="store_true", help="导出 JSON 格式")
     parser.add_argument("-v", "--verbose", action="store_true", help="显示详细信息")
     return parser
 
