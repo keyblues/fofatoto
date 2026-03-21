@@ -318,16 +318,6 @@ def export_json(results: list[FofaResult], output_path: Path) -> int:
 # ============ 主函数 ============
 
 def main():
-    # 检查是否显示帮助（帮助时不显示 banner）
-    if "-h" in sys.argv or "--help" in sys.argv:
-        parser = argparse.ArgumentParser(
-            description="FOFA 查询工具",
-            formatter_class=argparse.RawDescriptionHelpFormatter,
-            epilog=__doc__,
-        )
-        parser.parse_args()
-        sys.exit(0)
-
     # 自动检测并生成配置文件
     if not ensure_config_exists():
         sys.exit(1)
