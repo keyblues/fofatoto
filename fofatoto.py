@@ -167,7 +167,7 @@ class FofaClient:
             data = json.loads(resp.read().decode())
             if data.get("error"):
                 raise FofaAPIError(f"获取用量失败: {data.get('errmsg', '未知错误')}")
-            return data.get("data", {})
+            return data if not data.get("error") else {}
         except Exception as e:
             raise FofaAPIError(f"获取用量失败: {e}")
 
