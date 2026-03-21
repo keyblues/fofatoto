@@ -289,15 +289,19 @@ def export_txt(results: list[FofaResult], output_path: Path) -> int:
     count = 0
     with output_path.open("w", encoding="utf-8", newline="\n") as f:
         for r in results:
-            protocol = r.protocol or "http"
             if r.host:
-                if r.port and r.port not in ("80", "443"):
-                    url = f"{protocol}://{r.host}:{r.port}"
+                if r.host.startswith("http"):
+                    url = r.host
                 else:
-                    url = f"{protocol}://{r.host}"
+                    protocol = r.protocol or "http"
+                    if r.port and r.port not in ("80", "443"):
+                        url = f"{protocol}://{r.host}:{r.port}"
+                    else:
+                        url = f"{protocol}://{r.host}"
                 f.write(f"{url}\n")
                 count += 1
             elif r.ip:
+                protocol = r.protocol or "http"
                 if r.port and r.port not in ("80", "443"):
                     url = f"{protocol}://{r.ip}:{r.port}"
                 else:
@@ -377,7 +381,7 @@ def main():
 
     # 如果没有指定格式，默认全部导出
     if not any([args.csv, args.txt, args.json]):
-        args.csv = args.txt = args.json = True
+        args.csv = True
 
     # 没有查询语句时显示 usage
     if not args.query:
