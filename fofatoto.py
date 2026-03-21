@@ -3,10 +3,11 @@
 FOFA 查询工具 - 单文件工具
 
 用法:
-    python fofaoutput.py "protocol=http"                    # 基本查询
-    python fofaoutput.py "domain=baidu.com" -o results      # 指定输出文件名
-    python fofaoutput.py "ip=1.1.1.1/24" --json             # 输出 JSON 格式
-    python fofaoutput.py "port=80,443" -l 100               # 指定返回数量
+    python fofatoto.py "protocol=http"                    # 基本查询
+    python fofatoto.py "domain=baidu.com" -o results      # 指定输出文件名
+    python fofatoto.py "ip=1.1.1.1/24" --json             # 输出 JSON 格式
+    python fofatoto.py "port=80,443" -l 100               # 指定返回数量
+    python fofatoto.py "domain=baidu.com" -f "ip,port"    # 指定查询字段
 """
 
 import argparse
@@ -113,18 +114,59 @@ Config.validate = _config_validate
 @dataclass
 class FofaResult:
     """单条查询结果"""
-    host: str
-    ip: str
-    port: str
-    protocol: str
+    host: str = ""
+    ip: str = ""
+    port: str = ""
+    protocol: str = ""
     domain: str = ""
     title: str = ""
     server: str = ""
     country: str = ""
     city: str = ""
+    lastupdatetime: str = ""
+    asn: str = ""
+    org: str = ""
+    os: str = ""
+    icp: str = ""
+    jarm: str = ""
+    header: str = ""
+    banner: str = ""
+    cert: str = ""
+    product: str = ""
+    product_category: str = ""
+    version: str = ""
+    cname: str = ""
+    latitude: str = ""
+    longitude: str = ""
+    region: str = ""
+    country_name: str = ""
+    base_protocol: str = ""
+    link: str = ""
+    _extra: dict = None
+
+    def __post_init__(self):
+        self._extra = {}
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        result = asdict(self)
+        result.update(self._extra)
+        for key in list(result.keys()):
+            if result[key] == "" and key not in self._extra:
+                if key.startswith("_"):
+                    del result[key]
+        return result
+
+
+@dataclass
+class SearchStats:
+    """查询统计信息"""
+    total: int = 0
+    unique_ips: int = 0
+    results: list = None
+
+    def __post_init__(self):
+        if self.results is None:
+            self.results = []
 
 
 class FofaAPIError(Exception):
@@ -177,7 +219,7 @@ class FofaClient:
         size: int = 100,
         skip: int = 0,
         fields: Optional[str] = None,
-    ) -> list[FofaResult]:
+    ) -> SearchStats:
         """
         执行 FOFA 查询
 
@@ -188,7 +230,7 @@ class FofaClient:
             fields: 返回字段，默认为 host,ip,port,protocol,domain,title,server,country,city
 
         Returns:
-            结果列表
+            SearchStats 对象，包含结果列表、总匹配数和独立 IP 数
         """
         if fields is None:
             fields = "host,ip,port,protocol,domain,title,server,country,city"
@@ -211,24 +253,26 @@ class FofaClient:
             raise FofaAPIError(f"API 错误: {data.get('errmsg', '未知错误')}")
 
         results = []
+        fields_list = [f.strip() for f in fields.split(",")] if fields else ["host", "ip", "port", "protocol", "domain", "title", "server", "country", "city"]
+        known_fields = {"host", "ip", "port", "protocol", "domain", "title", "server", "country", "city", "lastupdatetime", "asn", "org", "os", "icp", "jarm", "header", "banner", "cert", "product", "product_category", "version", "cname", "latitude", "longitude", "region", "country_name", "base_protocol", "link"}
+        unique_ips = set()
         for item in data.get("results", []):
-            # fields 顺序与 fields 参数一致
-            result = FofaResult(
-                host=item[0] if len(item) > 0 else "",
-                ip=item[1] if len(item) > 1 else "",
-                port=item[2] if len(item) > 2 else "",
-                protocol=item[3] if len(item) > 3 else "",
-                domain=item[4] if len(item) > 4 else "",
-                title=item[5] if len(item) > 5 else "",
-                server=item[6] if len(item) > 6 else "",
-                country=item[7] if len(item) > 7 else "",
-                city=item[8] if len(item) > 8 else "",
-            )
+            result = FofaResult()
+            result._extra = {}
+            for i, field in enumerate(fields_list):
+                value = item[i] if len(item) > i else ""
+                if field in known_fields:
+                    setattr(result, field, value)
+                else:
+                    result._extra[field] = value
             results.append(result)
+            if result.ip:
+                unique_ips.add(result.ip)
 
-        return results
+        total = data.get("size", 0)
+        return SearchStats(total=total, unique_ips=len(unique_ips), results=results)
 
-    def search_all(self, query: str, max_size: int = 1000, page_size: int = 100) -> list[FofaResult]:
+    def search_all(self, query: str, max_size: int = 1000, page_size: int = 100, fields: Optional[str] = None) -> SearchStats:
         """
         查询所有结果（自动分页）
 
@@ -236,44 +280,65 @@ class FofaClient:
             query: FOFA 查询语句
             max_size: 最大返回数量
             page_size: 每页数量
+            fields: 返回字段
 
         Returns:
-            所有结果列表
+            SearchStats 对象，包含所有结果列表、总匹配数和独立 IP 数
         """
         all_results = []
+        unique_ips = set()
+        total = 0
         skip = 0
 
         while skip < max_size:
             batch_size = min(page_size, max_size - skip)
-            results = self.search(query, size=batch_size, skip=skip)
+            stats = self.search(query, size=batch_size, skip=skip, fields=fields)
 
-            if not results:
+            if not stats.results:
                 break
 
-            all_results.extend(results)
-            skip += len(results)
+            all_results.extend(stats.results)
+            unique_ips.update([r.ip for r in stats.results if r.ip])
+            if total == 0:
+                total = stats.total
 
-            # 避免请求过快
+            skip += len(stats.results)
+
             time.sleep(0.5)
 
-            # 如果返回数量小于请求数量，说明没有更多数据了
-            if len(results) < batch_size:
+            if len(stats.results) < batch_size:
                 break
 
-        return all_results
+        return SearchStats(total=total, unique_ips=len(unique_ips), results=all_results)
 
 
 # ============ 导出相关 ============
 
-def export_csv(results: list[FofaResult], output_path: Path) -> int:
+def export_csv(results: list[FofaResult], output_path: Path, fields: Optional[str] = None) -> int:
     """导出为 CSV 文件"""
     if not results:
         return 0
 
-    fieldnames = ["host", "ip", "port", "protocol", "domain", "title", "server", "country", "city"]
+    base_fields = ["host", "ip", "port", "protocol", "domain", "title", "server", "country", "city",
+                  "lastupdatetime", "asn", "org", "os", "icp", "jarm", "header", "banner", "cert",
+                  "product", "product_category", "version", "cname", "latitude", "longitude", "region",
+                  "country_name", "base_protocol", "link"]
+
+    if fields:
+        requested = [f.strip() for f in fields.split(",")]
+        fieldnames = [f for f in requested if f in base_fields]
+        extra_fields = [f for f in requested if f not in base_fields]
+    else:
+        fieldnames = base_fields
+        extra_fields = []
+
+    all_keys = set()
+    for r in results:
+        all_keys.update(r.to_dict().keys())
+    dynamic_extra = [f for f in all_keys if f not in base_fields and not f.startswith("_") and f not in fieldnames]
 
     with output_path.open("w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames + extra_fields + dynamic_extra, extrasaction='ignore')
         writer.writeheader()
         for r in results:
             writer.writerow(r.to_dict())
@@ -349,6 +414,7 @@ def build_parser():
     parser.add_argument("-csv", action="store_true", help="导出 CSV 格式")
     parser.add_argument("-txt", action="store_true", help="导出 TXT 格式（URL 列表）")
     parser.add_argument("-json", action="store_true", help="导出 JSON 格式")
+    parser.add_argument("-f", "--fields", help="指定查询字段，默认为 host,ip,port,protocol,domain,title,server,country,city", default="host,ip,port,protocol,domain,title,server,country,city")
     parser.add_argument("-v", "--verbose", action="store_true", help="显示详细信息")
     return parser
 
@@ -410,12 +476,13 @@ def main():
             print(f"[*] 数量限制: {'无限制' if args.all else args.limit}")
 
         if args.all:
-            results = client.search_all(args.query, max_size=10000)
+            stats = client.search_all(args.query, max_size=args.limit, fields=args.fields)
         else:
-            results = client.search(args.query, size=args.limit)
+            stats = client.search(args.query, size=args.limit, fields=args.fields)
 
-        if args.verbose:
-            print(f"[*] 找到 {len(results)} 条结果")
+        results = stats.results
+
+        print(f"[*] 找到 {YELLOW}{stats.total:,}{RESET} 条匹配结果")
 
         if not results:
             print("[-] 没有找到结果")
@@ -427,7 +494,7 @@ def main():
 
         if args.csv:
             csv_path = unique_path(output_path.with_suffix(".csv"))
-            count = export_csv(results, csv_path)
+            count = export_csv(results, csv_path, fields=args.fields)
             print(f"[+] 已导出 CSV: {csv_path} ({count} 条)")
             exported += 1
 
