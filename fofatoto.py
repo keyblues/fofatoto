@@ -312,7 +312,7 @@ class FofaClient:
         if fields is None:
             fields = "host,ip,port,protocol,domain,title,server,country,city,lastupdatetime"
 
-        time_query = f'{query} after="{start_time}" before="{end_time}"'
+        time_query = f'{query} && after="{start_time}" && before="{end_time}"'
         return self.search(time_query, size=size, skip=0, fields=fields)
 
     def search_all_efficient(
@@ -384,7 +384,7 @@ class FofaClient:
             print_done()
             return self._deduplicate_results(stats.results)
 
-        count_stats = self.search(f'{query} before="{max_timestamp}"', size=1, skip=0, fields=fields)
+        count_stats = self.search(f'{query} && before="{max_timestamp}"', size=1, skip=0, fields=fields)
         api_used += 1
         total_estimated = count_stats.total
 
@@ -407,7 +407,7 @@ class FofaClient:
                 print(f"  [*] 已达到 {int(fill_percent*100)}% 目标，停止")
                 break
 
-            count_stats = self.search(f'{query} before="{before_time}"', size=1, skip=0, fields=fields)
+            count_stats = self.search(f'{query} && before="{before_time}"', size=1, skip=0, fields=fields)
             api_used += 1
             range_total = count_stats.total
 
@@ -416,7 +416,7 @@ class FofaClient:
 
             if range_total <= 10000:
                 batch_num += 1
-                slice_stats = self.search(f'{query} before="{before_time}"', size=10000, skip=0, fields=fields)
+                slice_stats = self.search(f'{query} && before="{before_time}"', size=10000, skip=0, fields=fields)
                 api_used += 1
 
                 batch_min_time = None
