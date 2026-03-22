@@ -331,7 +331,7 @@ class FofaClient:
             filled = int(bar_width * percent)
             bar = f"{GREEN}{'=' * filled}{RESET}{'~' if filled < bar_width else ''}{' ' * (bar_width - filled - 1)}"
             pct_color = YELLOW if percent < 50 else GREEN
-            print(f"\r[{bar}] {pct_color}{percent*100:5.1f}%{RESET} | {GREEN}{fetched:>6}{RESET}/{target_count:<6} | {RED}配额:{api_used:>6}{RESET} | {msg}", end="", flush=True)
+            print(f"\r[{bar}] {pct_color}{percent*100:5.1f}%{RESET} | {GREEN}{fetched:>6}{RESET}/{total_estimated:<6} | {RED}配额:{api_used:>6}{RESET} | {msg}", end="", flush=True)
 
         def print_done():
             percent = int(len(all_results) / total_estimated * 100) if total_estimated > 0 else 0
