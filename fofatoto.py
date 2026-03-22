@@ -614,14 +614,12 @@ def main():
     try:
         limit_value = args.limit
         is_max = str(limit_value).lower() == "max"
-        is_large = isinstance(limit_value, int) and limit_value > 10000
 
         if args.verbose:
             print(f"[*] 查询: {args.query}")
             print(f"[*] 数量限制: {'无限制(max)' if is_max else limit_value}")
 
-        if is_max or is_large:
-            actual_limit = 0 if is_max else limit_value
+        if is_max:
             if args.verbose:
                 print(f"[*] 使用高效 after 模式查询...")
                 print(f"[*] 完成百分比: {int(args.fill*100)}%")
@@ -629,7 +627,20 @@ def main():
                     print(f"[*] 搜索全部数据（不止一年）")
             stats = client.search_all_efficient(
                 args.query,
-                max_size=actual_limit,
+                max_size=0,
+                fields=args.fields,
+                fill_percent=args.fill,
+                full=args.full,
+            )
+        elif isinstance(limit_value, int) and limit_value > 10000:
+            if args.verbose:
+                print(f"[*] 使用高效 after 模式查询...")
+                print(f"[*] 完成百分比: {int(args.fill*100)}%")
+                if args.full:
+                    print(f"[*] 搜索全部数据（不止一年）")
+            stats = client.search_all_efficient(
+                args.query,
+                max_size=limit_value,
                 fields=args.fields,
                 fill_percent=args.fill,
                 full=args.full,
