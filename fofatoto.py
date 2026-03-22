@@ -403,7 +403,16 @@ class FofaClient:
             if len(slice_stats.results) < 10000:
                 break
 
-            before_time = batch_min_time
+            if batch_min_time:
+                from datetime import datetime, timedelta
+                try:
+                    dt = datetime.strptime(batch_min_time, "%Y-%m-%d %H:%M:%S")
+                    dt -= timedelta(seconds=1)
+                    before_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                except:
+                    before_time = batch_min_time
+            else:
+                before_time = None
 
             time.sleep(api_rate_limit)
 
