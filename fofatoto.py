@@ -321,6 +321,8 @@ class FofaClient:
         max_size: int = 0,
         fields: Optional[str] = None,
         progress_callback: Optional[Callable] = None,
+        fill_percent: float = 0.9,
+        api_rate_limit: float = 5.0,
     ) -> SearchStats:
         """
         高效查询所有结果：使用 before 单向分段 + size=1 探测策略
@@ -336,7 +338,9 @@ class FofaClient:
             query: FOFA 查询语句
             max_size: 最大返回数量（0 表示不限制）
             fields: 返回字段
-            progress_callback: 进度回调函数 (current, total, message)
+            progress_callback: 进度回调函数 (fetched, total, message, api_used)
+            fill_percent: 完成百分比（0.0-1.0），达到目标后停止查询，默认 0.9
+            api_rate_limit: API 频率限制（秒），默认 5 秒
 
         Returns:
             SearchStats 对象
@@ -347,17 +351,42 @@ class FofaClient:
         all_results = []
         seen_hosts = set()
         unique_ips = set()
+        api_used = 0
+        total_estimated = 0
+
+        def default_callback(fetched, total, msg):
+            print(f"[*] {msg} | 已获取: {fetched} | API消耗: {api_used} 次")
+
+        cb = progress_callback or default_callback
 
         stats = self.search(f'{query} lastupdatetimedesc="true"', size=1, skip=0, fields=fields)
+        api_used += 1
         max_timestamp = stats.results[0].lastupdatetime if stats.results else ""
 
         if not max_timestamp:
             stats = self.search(query, size=10000, skip=0, fields=fields)
+            api_used += 1
+            cb(len(all_results), total_estimated, "查完了")
             return self._deduplicate_results(stats.results)
+
+        count_stats = self.search(f'{query} before="{max_timestamp}"', size=1, skip=0, fields=fields)
+        api_used += 1
+        total_estimated = count_stats.total
+
+        if total_estimated == 0:
+            cb(0, 0, "无匹配数据")
+            return SearchStats(total=0, unique_ips=0, results=[])
+
+        target_count = int(total_estimated * fill_percent)
+        cb(0, total_estimated, f"预计目标: {target_count} 条 ({int(fill_percent*100)}%)")
 
         time_ranges = [(None, max_timestamp)]
 
         while time_ranges:
+            if len(all_results) >= target_count:
+                cb(len(all_results), total_estimated, f"已达到 {int(fill_percent*100)}% 目标，停止查询")
+                break
+
             start_time, end_time = time_ranges.pop(0)
 
             if start_time:
@@ -366,25 +395,27 @@ class FofaClient:
                 count_query = f'{query} before="{end_time}"'
 
             count_stats = self.search(count_query, size=1, skip=0, fields=fields)
-            total_count = count_stats.total
+            api_used += 1
+            range_total = count_stats.total
 
-            if total_count == 0:
+            if range_total == 0:
                 continue
 
-            if total_count <= 10000:
+            if range_total <= 10000:
                 slice_stats = self.search(count_query, size=10000, skip=0, fields=fields)
+                api_used += 1
                 for r in slice_stats.results:
                     if r.host and r.host not in seen_hosts:
                         seen_hosts.add(r.host)
                         all_results.append(r)
                         if r.ip:
                             unique_ips.add(r.ip)
-                if progress_callback:
-                    progress_callback(len(all_results), total_count, f"查完 {end_time} 范围 ({total_count} 条)")
+                cb(len(all_results), total_estimated, f"查完 {end_time} ({range_total} 条)")
             else:
                 mid_time = self._find_midpoint_time(start_time, end_time)
                 if mid_time == start_time or mid_time == end_time:
                     slice_stats = self.search(count_query, size=10000, skip=0, fields=fields)
+                    api_used += 1
                     for r in slice_stats.results:
                         if r.host and r.host not in seen_hosts:
                             seen_hosts.add(r.host)
@@ -395,11 +426,12 @@ class FofaClient:
                     time_ranges.insert(0, (start_time, mid_time))
                     time_ranges.insert(1, (mid_time, end_time))
 
-            time.sleep(0.3)
+            time.sleep(api_rate_limit)
 
             if max_size > 0 and len(all_results) >= max_size:
                 break
 
+        cb(len(all_results), total_estimated, f"查询完成 (API消耗: {api_used} 次)")
         return SearchStats(total=len(all_results), unique_ips=len(unique_ips), results=all_results)
 
     def _binary_search_time_points(
@@ -614,6 +646,7 @@ def build_parser():
     parser.add_argument("-o", "--output", help="输出文件名（不含后缀），默认为 fofa_results", default="fofa_results")
     parser.add_argument("-l", "--limit", help="最大返回数量，支持 >10000 的数值或 'max'（导出所有匹配数据）", default=100)
     parser.add_argument("-a", "--all", action="store_true", help="使用 after/before 高效模式导出所有结果（推荐用于 >10000 条）")
+    parser.add_argument("--fill", type=float, default=0.9, help="高效模式完成百分比（0.0-1.0），默认 0.9（90%%），设为 1.0 则查完所有数据")
     parser.add_argument("-csv", action="store_true", help="导出 CSV 格式")
     parser.add_argument("-txt", action="store_true", help="导出 TXT 格式（URL 列表）")
     parser.add_argument("-json", action="store_true", help="导出 JSON 格式")
@@ -685,11 +718,13 @@ def main():
         if is_max or is_large or args.all:
             actual_limit = 0 if is_max else limit_value
             if args.verbose:
-                print(f"[*] 使用高效 after/before 模式查询...")
+                print(f"[*] 使用高效 before 模式查询...")
+                print(f"[*] 完成百分比: {int(args.fill*100)}%")
             stats = client.search_all_efficient(
                 args.query,
                 max_size=actual_limit,
                 fields=args.fields,
+                fill_percent=args.fill,
             )
         else:
             stats = client.search(args.query, size=args.limit, fields=args.fields)
