@@ -584,7 +584,7 @@ def main():
 
         if is_max:
             if args.verbose:
-                print(f"[*] 使用高效 after 模式查询...")
+                print(f"[*] 使用高效 before 模式查询...")
                 print(f"[*] 完成百分比: {int(args.fill*100)}%")
                 if args.full:
                     print(f"[*] 搜索全部数据（不止一年）")
@@ -597,7 +597,7 @@ def main():
             )
         elif limit_value > 10000:
             if args.verbose:
-                print(f"[*] 使用高效 after 模式查询...")
+                print(f"[*] 使用高效 before 模式查询...")
                 print(f"[*] 完成百分比: {int(args.fill*100)}%")
                 if args.full:
                     print(f"[*] 搜索全部数据（不止一年）")
