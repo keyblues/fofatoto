@@ -352,6 +352,8 @@ class FofaClient:
         api_used += 1
         total_estimated = count_stats.total
 
+        time.sleep(api_rate_limit)
+
         if total_estimated == 0:
             print("  [*] 无匹配数据")
             return SearchStats(total=0, unique_ips=0, results=[])
@@ -371,7 +373,7 @@ class FofaClient:
                 break
 
             if before_time:
-                range_query = f'{query} && after="{before_time}"'
+                range_query = f'{query} && before="{before_time}"'
             else:
                 range_query = query
 
@@ -381,7 +383,7 @@ class FofaClient:
             if not slice_stats.results:
                 break
 
-            batch_max_time = None
+            batch_min_time = None
             for r in slice_stats.results:
                 if r.host and r.host not in seen_hosts:
                     seen_hosts.add(r.host)
@@ -389,18 +391,16 @@ class FofaClient:
                     if r.ip:
                         unique_ips.add(r.ip)
                 if r.lastupdatetime:
-                    if batch_max_time is None or r.lastupdatetime > batch_max_time:
-                        batch_max_time = r.lastupdatetime
+                    if batch_min_time is None or r.lastupdatetime < batch_min_time:
+                        batch_min_time = r.lastupdatetime
 
             batch_num += 1
             print_progress(f"批次 {batch_num}")
-            if batch_max_time:
-                print(f"\n  [*] 分界时间: {batch_max_time}")
 
             if len(slice_stats.results) < 10000:
                 break
 
-            before_time = batch_max_time
+            before_time = batch_min_time
 
             time.sleep(api_rate_limit)
 
@@ -591,8 +591,9 @@ def main():
 
     # 执行查询
     try:
-        limit_value = args.limit
-        is_max = str(limit_value).lower() == "max"
+        limit_str = str(args.limit)
+        is_max = limit_str.lower() == "max"
+        limit_value = 0 if is_max else int(limit_str)
 
         if args.verbose:
             print(f"[*] 查询: {args.query}")
@@ -611,7 +612,7 @@ def main():
                 fill_percent=args.fill,
                 full=args.full,
             )
-        elif isinstance(limit_value, int) and limit_value > 10000:
+        elif limit_value > 10000:
             if args.verbose:
                 print(f"[*] 使用高效 after 模式查询...")
                 print(f"[*] 完成百分比: {int(args.fill*100)}%")
@@ -625,7 +626,7 @@ def main():
                 full=args.full,
             )
         else:
-            stats = client.search(args.query, size=args.limit, fields=args.fields)
+            stats = client.search(args.query, size=limit_value, fields=args.fields)
 
         results = stats.results
 
