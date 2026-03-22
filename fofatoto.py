@@ -7,13 +7,13 @@ FOFA 查询工具 - 单文件工具
     python fofatoto.py "domain=baidu.com" -o results      # 指定输出文件名
     python fofatoto.py "ip=1.1.1.1/24" --json             # 输出 JSON 格式
     python fofatoto.py "port=80,443" -l 50000             # 指定返回 50000 条
-    python fofatoto.py "domain=baidu.com" -l max          # 导出所有匹配数据（高效模式）
+    python fofatoto.py "domain=baidu.com" -l max          # 导出所有匹配数据
     python fofatoto.py "domain=baidu.com" -f "ip,port"    # 指定查询字段
-    python fofatoto.py "domain=baidu.com" -a              # 使用 after/before 高效模式
+    python fofatoto.py "domain=baidu.com" -l max --full   # 导出超过一年的全部数据
 
 高效模式说明:
-    当 -l 参数 > 10000 或为 max 时，自动使用 after/before 时间范围查询
-    该模式通过二分查找划分时间分片，每片最多 10000 条，避免翻页
+    当 -l 参数 > 10000 或为 max 时，自动使用 after 时间范围查询
+    该模式每次获取 10000 条，自动根据 lastupdatetime 继续获取下一批
     数据会自动去重，确保唯一性
 """
 
@@ -550,7 +550,6 @@ def build_parser():
     parser.add_argument("query", nargs="?", help="FOFA 查询语句，如: domain=baidu.com")
     parser.add_argument("-o", "--output", help="输出文件名（不含后缀），默认为 fofa_results", default="fofa_results")
     parser.add_argument("-l", "--limit", help="最大返回数量，支持 >10000 的数值或 'max'（导出所有匹配数据）", default="100")
-    parser.add_argument("-a", "--all", action="store_true", help="使用 after/before 高效模式导出所有结果（推荐用于 >10000 条）")
     parser.add_argument("--fill", type=float, default=0.9, help="高效模式完成百分比（0.0-1.0），默认 0.9（90%%），设为 1.0 则查完所有数据")
     parser.add_argument("-csv", action="store_true", help="导出 CSV 格式")
     parser.add_argument("-txt", action="store_true", help="导出 TXT 格式（URL 列表）")
@@ -621,7 +620,7 @@ def main():
             print(f"[*] 查询: {args.query}")
             print(f"[*] 数量限制: {'无限制(max)' if is_max else limit_value}")
 
-        if is_max or is_large or args.all:
+        if is_max or is_large:
             actual_limit = 0 if is_max else limit_value
             if args.verbose:
                 print(f"[*] 使用高效 after 模式查询...")
