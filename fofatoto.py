@@ -312,7 +312,7 @@ class FofaClient:
         if fields is None:
             fields = "host,ip,port,protocol,domain,title,server,country,city,lastupdatetime"
 
-        time_query = f'{query} && after="{start_time}" && before="{end_time}"'
+        time_query = f'{query} after="{start_time}" before="{end_time}"'
         return self.search(time_query, size=size, skip=0, fields=fields)
 
     def search_all_efficient(
@@ -325,13 +325,13 @@ class FofaClient:
         api_rate_limit: float = 5.0,
     ) -> SearchStats:
         """
-        高效查询所有结果：使用 before 单向分段 + size=1 探测策略
+        高效查询所有结果：使用 before 单向分段策略
 
         策略：
         1. 获取最大时间点
-        2. 用 size=1 探测当前时间范围内总数
-        3. 如果总数 <= 10000，直接查；否则用二分法细分时间
-        4. 每个分片查满 10000 后继续探测下一个分片
+        2. 用 before 从最大时间往前查，每次最多 10000 条
+        3. 每批记录本批中最小的 lastupdatetime，作为下次查询的 before 值
+        4. 直到某批数据不足 10000 条或达到目标数量
         5. 合并所有结果并去重
 
         Args:
@@ -356,7 +356,7 @@ class FofaClient:
 
         bar_width = 30
 
-        def print_progress(bar_len=0, msg=""):
+        def print_progress(msg=""):
             if total_estimated <= 0:
                 return
             fetched = len(all_results)
@@ -396,59 +396,53 @@ class FofaClient:
         print(f"\n  [*] 匹配总量: {total_estimated:,}")
         print(f"  [*] 目标数量: {target_count:,} ({int(fill_percent*100)}%)")
         print(f"  [*] 时间范围: ~ {max_timestamp}")
-        print_progress(bar_width, "开始查询...")
+        print_progress("开始查询...")
 
-        time_ranges = [(None, max_timestamp)]
+        before_time = max_timestamp
         batch_num = 0
 
-        while time_ranges:
+        while before_time:
             if len(all_results) >= target_count:
                 print()
                 print(f"  [*] 已达到 {int(fill_percent*100)}% 目标，停止")
                 break
 
-            start_time, end_time = time_ranges.pop(0)
-
-            if start_time:
-                count_query = f'{query} after="{start_time}" before="{end_time}"'
-            else:
-                count_query = f'{query} before="{end_time}"'
-
-            count_stats = self.search(count_query, size=1, skip=0, fields=fields)
+            count_stats = self.search(f'{query} before="{before_time}"', size=1, skip=0, fields=fields)
             api_used += 1
             range_total = count_stats.total
 
             if range_total == 0:
-                continue
+                break
 
             if range_total <= 10000:
                 batch_num += 1
-                slice_stats = self.search(count_query, size=10000, skip=0, fields=fields)
+                slice_stats = self.search(f'{query} before="{before_time}"', size=10000, skip=0, fields=fields)
                 api_used += 1
+
+                batch_min_time = None
                 for r in slice_stats.results:
                     if r.host and r.host not in seen_hosts:
                         seen_hosts.add(r.host)
                         all_results.append(r)
                         if r.ip:
                             unique_ips.add(r.ip)
-                print_progress(bar_width, f"批次 {batch_num}")
-            else:
-                mid_time = self._find_midpoint_time(start_time, end_time)
-                if mid_time == start_time or mid_time == end_time:
-                    batch_num += 1
-                    slice_stats = self.search(count_query, size=10000, skip=0, fields=fields)
-                    api_used += 1
-                    for r in slice_stats.results:
-                        if r.host and r.host not in seen_hosts:
-                            seen_hosts.add(r.host)
-                            all_results.append(r)
-                            if r.ip:
-                                unique_ips.add(r.ip)
-                    print_progress(bar_width, f"批次 {batch_num}")
+                    if r.lastupdatetime and (batch_min_time is None or r.lastupdatetime < batch_min_time):
+                        batch_min_time = r.lastupdatetime
+
+                print_progress(f"批次 {batch_num}")
+
+                if len(slice_stats.results) < 10000:
+                    break
+
+                if batch_min_time and batch_min_time < before_time:
+                    before_time = batch_min_time
                 else:
-                    time_ranges.insert(0, (start_time, mid_time))
-                    time_ranges.insert(1, (mid_time, end_time))
-                    print_progress(bar_width, "细分时间...")
+                    break
+            else:
+                mid_time = self._find_midpoint_time("2000-01-01T00:00:00", before_time)
+                before_time = mid_time
+                print_progress("细分时间...")
+                continue
 
             time.sleep(api_rate_limit)
 
@@ -457,46 +451,6 @@ class FofaClient:
 
         print_done()
         return SearchStats(total=len(all_results), unique_ips=len(unique_ips), results=all_results)
-
-    def _binary_search_time_points(
-        self,
-        query: str,
-        start_time: str,
-        end_time: str,
-        target_size: int,
-        fields: str,
-    ) -> list:
-        """
-        二分查找时间分界点，确保每个分片数据量不超过 target_size
-
-        Returns:
-            时间分界点列表（不包含首尾）
-        """
-        time_points = []
-        stack = [(start_time, end_time)]
-
-        while stack:
-            current_start, current_end = stack.pop()
-
-            test_query = f'{query} after="{current_start}" before="{current_end}"'
-            stats = self.search(test_query, size=target_size, skip=0, fields=fields)
-            count = len(stats.results)
-
-            if count == 0:
-                continue
-
-            if count < target_size:
-                continue
-
-            mid_time = self._find_midpoint_time(current_start, current_end)
-            if mid_time == current_start or mid_time == current_end:
-                time_points.append(mid_time)
-                continue
-
-            stack.append((mid_time, current_end))
-            stack.append((current_start, mid_time))
-
-        return sorted(time_points)
 
     def _find_midpoint_time(self, start: str, end: str) -> str:
         """找到两个时间的中点时间"""
@@ -668,7 +622,7 @@ def build_parser():
     )
     parser.add_argument("query", nargs="?", help="FOFA 查询语句，如: domain=baidu.com")
     parser.add_argument("-o", "--output", help="输出文件名（不含后缀），默认为 fofa_results", default="fofa_results")
-    parser.add_argument("-l", "--limit", help="最大返回数量，支持 >10000 的数值或 'max'（导出所有匹配数据）", default=100)
+    parser.add_argument("-l", "--limit", help="最大返回数量，支持 >10000 的数值或 'max'（导出所有匹配数据）", default="100")
     parser.add_argument("-a", "--all", action="store_true", help="使用 after/before 高效模式导出所有结果（推荐用于 >10000 条）")
     parser.add_argument("--fill", type=float, default=0.9, help="高效模式完成百分比（0.0-1.0），默认 0.9（90%%），设为 1.0 则查完所有数据")
     parser.add_argument("-csv", action="store_true", help="导出 CSV 格式")
