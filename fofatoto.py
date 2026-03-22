@@ -489,45 +489,6 @@ class FofaClient:
         stats = self.search(query, size=1, page=1, fields="host")
         return stats.total
 
-    def search_all(self, query: str, max_size: int = 1000, page_size: int = 100, fields: Optional[str] = None) -> SearchStats:
-        """
-        查询所有结果（自动分页）- 适用于 <=10000 条的场景
-
-        Args:
-            query: FOFA 查询语句
-            max_size: 最大返回数量
-            page_size: 每页数量
-            fields: 返回字段
-
-        Returns:
-            SearchStats 对象，包含所有结果列表、总匹配数和独立 IP 数
-        """
-        all_results = []
-        unique_ips = set()
-        total = 0
-        page = 1
-
-        while len(all_results) < max_size:
-            batch_size = min(page_size, max_size - len(all_results))
-            stats = self.search(query, size=batch_size, page=page, fields=fields)
-
-            if not stats.results:
-                break
-
-            all_results.extend(stats.results)
-            unique_ips.update([r.ip for r in stats.results if r.ip])
-            if total == 0:
-                total = stats.total
-
-            page += 1
-
-            time.sleep(0.5)
-
-            if len(stats.results) < batch_size:
-                break
-
-        return SearchStats(total=total, unique_ips=len(unique_ips), results=all_results)
-
 
 # ============ 导出相关 ============
 
