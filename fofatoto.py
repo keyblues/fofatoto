@@ -47,6 +47,7 @@ BANNER = r"""
 GREEN = "\033[92m"
 YELLOW = "\033[93m"
 RED = "\033[91m"
+CYAN = "\033[96m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
 
@@ -328,15 +329,16 @@ class FofaClient:
             fetched = len(all_results)
             percent = fetched / total_estimated
             filled = int(bar_width * percent)
-            bar = "=" * filled + "-" + " " * (bar_width - filled - 1) if filled < bar_width else "=" * bar_width
-            print(f"\r[{bar}] {percent*100:5.1f}% | {fetched:>6}/{target_count:<6} | 配额: {api_used:>6} | {msg}", end="", flush=True)
+            bar = f"{GREEN}{'=' * filled}{RESET}{'~' if filled < bar_width else ''}{' ' * (bar_width - filled - 1)}"
+            pct_color = YELLOW if percent < 50 else GREEN
+            print(f"\r[{bar}] {pct_color}{percent*100:5.1f}%{RESET} | {GREEN}{fetched:>6}{RESET}/{target_count:<6} | {RED}配额:{api_used:>6}{RESET} | {msg}", end="", flush=True)
 
         def print_done():
             percent = int(len(all_results) / total_estimated * 100) if total_estimated > 0 else 0
             print()
-            print(f"[*] 查询完成 (API消耗: {api_used} 配额)")
-            print(f"[*] 获取数据: {len(all_results):,} 条 (覆盖率 ~{percent}%)")
-            print(f"[*] 独立 IP: {len(unique_ips):,}")
+            print(f"[*] {GREEN}查询完成{RESET} (API消耗: {RED}{api_used}{RESET} 配额)")
+            print(f"[*] 获取数据: {GREEN}{len(all_results):,}{RESET} 条 (覆盖率 ~{percent}%)")
+            print(f"[*] 独立 IP: {CYAN}{len(unique_ips):,}{RESET}")
 
         count_stats = self.search(query, size=1, page=1, fields=fields, full=full)
         api_used += 1
