@@ -6,8 +6,15 @@ FOFA 查询工具 - 单文件工具
     python fofatoto.py "protocol=http"                    # 基本查询
     python fofatoto.py "domain=baidu.com" -o results      # 指定输出文件名
     python fofatoto.py "ip=1.1.1.1/24" --json             # 输出 JSON 格式
-    python fofatoto.py "port=80,443" -l 100               # 指定返回数量
+    python fofatoto.py "port=80,443" -l 50000             # 指定返回 50000 条
+    python fofatoto.py "domain=baidu.com" -l max          # 导出所有匹配数据（高效模式）
     python fofatoto.py "domain=baidu.com" -f "ip,port"    # 指定查询字段
+    python fofatoto.py "domain=baidu.com" -a              # 使用 after/before 高效模式
+
+高效模式说明:
+    当 -l 参数 > 10000 或为 max 时，自动使用 after/before 时间范围查询
+    该模式通过二分查找划分时间分片，每片最多 10000 条，避免翻页
+    数据会自动去重，确保唯一性
 """
 
 import argparse
@@ -19,7 +26,7 @@ import base64
 import time
 from pathlib import Path
 from dataclasses import dataclass, asdict
-from typing import Optional
+from typing import Optional, Callable
 
 
 # ============ Banner ============
@@ -272,9 +279,204 @@ class FofaClient:
         total = data.get("size", 0)
         return SearchStats(total=total, unique_ips=len(unique_ips), results=results)
 
+    def _parse_time(self, time_str: str) -> int:
+        """解析时间字符串为时间戳"""
+        from email.utils import parsedate_to_datetime
+        try:
+            dt = parsedate_to_datetime(time_str)
+            return int(dt.timestamp())
+        except:
+            return 0
+
+    def search_by_time_range(
+        self,
+        query: str,
+        start_time: str,
+        end_time: str,
+        size: int = 10000,
+        fields: Optional[str] = None,
+    ) -> SearchStats:
+        """
+        使用 after/before 时间范围查询（每次最多 10000 条）
+
+        Args:
+            query: 原始 FOFA 查询语句
+            start_time: 开始时间（RFC 3339 格式，如 "2024-01-01T00:00:00"）
+            end_time: 结束时间
+            size: 返回数量（最大 10000）
+            fields: 返回字段
+
+        Returns:
+            SearchStats 对象
+        """
+        if fields is None:
+            fields = "host,ip,port,protocol,domain,title,server,country,city,lastupdatetime"
+
+        time_query = f'{query} && after="{start_time}" && before="{end_time}"'
+        return self.search(time_query, size=size, skip=0, fields=fields)
+
+    def search_all_efficient(
+        self,
+        query: str,
+        max_size: int = 0,
+        fields: Optional[str] = None,
+        progress_callback: Optional[callable] = None,
+    ) -> SearchStats:
+        """
+        高效查询所有结果：使用 after/before 分段策略，避免翻页
+
+        策略：
+        1. 先获取数据总数量和最大时间范围
+        2. 使用二分查找确定时间分界点
+        3. 每个时间分片单独查询（每片最多 10000 条）
+        4. 合并所有结果并去重
+
+        Args:
+            query: FOFA 查询语句
+            max_size: 最大返回数量（0 表示不限制）
+            fields: 返回字段
+            progress_callback: 进度回调函数 (current, total, message)
+
+        Returns:
+            SearchStats 对象
+        """
+        if fields is None:
+            fields = "host,ip,port,protocol,domain,title,server,country,city,lastupdatetime"
+
+        all_results = []
+        seen_hosts = set()
+        unique_ips = set()
+
+        size_per_query = 10000
+
+        first_query = f"{query}&&lastupdatetimeasc=true"
+        stats = self.search(first_query, size=1, skip=0, fields=fields)
+        min_timestamp = stats.results[0].lastupdatetime if stats.results else ""
+
+        stats = self.search(f"{query}&&lastupdatetimedesc=true", size=1, skip=0, fields=fields)
+        max_timestamp = stats.results[0].lastupdatetime if stats.results else ""
+
+        if not min_timestamp or not max_timestamp:
+            stats = self.search(query, size=10000, skip=0, fields=fields)
+            return self._deduplicate_results(stats.results)
+
+        time_points = self._binary_search_time_points(
+            query, min_timestamp, max_timestamp, size_per_query, fields
+        )
+
+        time_points = [min_timestamp] + time_points + [max_timestamp]
+
+        total_slices = len(time_points) - 1
+        fetched = 0
+
+        for i in range(total_slices):
+            slice_start = time_points[i]
+            slice_end = time_points[i + 1]
+
+            time_query = f'{query} && after="{slice_start}" && before="{slice_end}"'
+            slice_stats = self.search(time_query, size=size_per_query, skip=0, fields=fields)
+
+            for r in slice_stats.results:
+                if r.host and r.host not in seen_hosts:
+                    seen_hosts.add(r.host)
+                    all_results.append(r)
+                    if r.ip:
+                        unique_ips.add(r.ip)
+                    fetched += 1
+
+                    if max_size > 0 and fetched >= max_size:
+                        return SearchStats(
+                            total=fetched,
+                            unique_ips=len(unique_ips),
+                            results=all_results[:max_size]
+                        )
+
+            if progress_callback:
+                progress_callback(fetched, total_slices, f"时间片 {i+1}/{total_slices}")
+
+            time.sleep(0.3)
+
+            if len(slice_stats.results) < size_per_query:
+                continue
+
+        return SearchStats(total=len(all_results), unique_ips=len(unique_ips), results=all_results)
+
+    def _binary_search_time_points(
+        self,
+        query: str,
+        start_time: str,
+        end_time: str,
+        target_size: int,
+        fields: str,
+    ) -> list:
+        """
+        二分查找时间分界点，确保每个分片数据量不超过 target_size
+
+        Returns:
+            时间分界点列表（不包含首尾）
+        """
+        time_points = []
+        stack = [(start_time, end_time)]
+
+        while stack:
+            current_start, current_end = stack.pop()
+
+            test_query = f'{query} && after="{current_start}" && before="{current_end}"'
+            stats = self.search(test_query, size=target_size, skip=0, fields=fields)
+            count = len(stats.results)
+
+            if count == 0:
+                continue
+
+            if count < target_size:
+                continue
+
+            mid_time = self._find_midpoint_time(current_start, current_end)
+            if mid_time == current_start or mid_time == current_end:
+                time_points.append(mid_time)
+                continue
+
+            stack.append((mid_time, current_end))
+            stack.append((current_start, mid_time))
+
+        return sorted(time_points)
+
+    def _find_midpoint_time(self, start: str, end: str) -> str:
+        """找到两个时间的中点时间"""
+        from email.utils import parsedate_to_datetime
+        from datetime import timedelta
+
+        try:
+            start_dt = parsedate_to_datetime(start)
+            end_dt = parsedate_to_datetime(end)
+            mid_dt = start_dt + (end_dt - start_dt) / 2
+            return mid_dt.strftime("%Y-%m-%dT%H:%M:%S")
+        except:
+            return start
+
+    def _deduplicate_results(self, results: list) -> SearchStats:
+        """去重并统计"""
+        seen_hosts = set()
+        unique_ips = set()
+        deduped = []
+
+        for r in results:
+            if r.host and r.host not in seen_hosts:
+                seen_hosts.add(r.host)
+                deduped.append(r)
+                if r.ip:
+                    unique_ips.add(r.ip)
+
+        return SearchStats(total=len(deduped), unique_ips=len(unique_ips), results=deduped)
+
+    def get_total_count(self, query: str) -> int:
+        """获取查询的总匹配数量"""
+        stats = self.search(query, size=1, skip=0, fields="host")
+        return stats.total
+
     def search_all(self, query: str, max_size: int = 1000, page_size: int = 100, fields: Optional[str] = None) -> SearchStats:
         """
-        查询所有结果（自动分页）
+        查询所有结果（自动分页）- 适用于 <=10000 条的场景
 
         Args:
             query: FOFA 查询语句
@@ -409,8 +611,8 @@ def build_parser():
     )
     parser.add_argument("query", nargs="?", help="FOFA 查询语句，如: domain=baidu.com")
     parser.add_argument("-o", "--output", help="输出文件名（不含后缀），默认为 fofa_results", default="fofa_results")
-    parser.add_argument("-l", "--limit", type=int, help="最大返回数量，默认 100", default=100)
-    parser.add_argument("-a", "--all", action="store_true", help="查询所有结果（可能很慢）")
+    parser.add_argument("-l", "--limit", help="最大返回数量，支持 >10000 的数值或 'max'（导出所有匹配数据）", default=100)
+    parser.add_argument("-a", "--all", action="store_true", help="使用 after/before 高效模式导出所有结果（推荐用于 >10000 条）")
     parser.add_argument("-csv", action="store_true", help="导出 CSV 格式")
     parser.add_argument("-txt", action="store_true", help="导出 TXT 格式（URL 列表）")
     parser.add_argument("-json", action="store_true", help="导出 JSON 格式")
@@ -471,12 +673,23 @@ def main():
 
     # 执行查询
     try:
+        limit_value = args.limit
+        is_max = str(limit_value).lower() == "max"
+        is_large = isinstance(limit_value, int) and limit_value > 10000
+
         if args.verbose:
             print(f"[*] 查询: {args.query}")
-            print(f"[*] 数量限制: {'无限制' if args.all else args.limit}")
+            print(f"[*] 数量限制: {'无限制(max)' if is_max else limit_value}")
 
-        if args.all:
-            stats = client.search_all(args.query, max_size=args.limit, fields=args.fields)
+        if is_max or is_large or args.all:
+            actual_limit = 0 if is_max else limit_value
+            if args.verbose:
+                print(f"[*] 使用高效 after/before 模式查询...")
+            stats = client.search_all_efficient(
+                args.query,
+                max_size=actual_limit,
+                fields=args.fields,
+            )
         else:
             stats = client.search(args.query, size=args.limit, fields=args.fields)
 
