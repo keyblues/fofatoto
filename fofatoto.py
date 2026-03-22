@@ -320,16 +320,17 @@ class FofaClient:
         query: str,
         max_size: int = 0,
         fields: Optional[str] = None,
-        progress_callback: Optional[callable] = None,
+        progress_callback: Optional[Callable] = None,
     ) -> SearchStats:
         """
-        高效查询所有结果：使用 after/before 分段策略，避免翻页
+        高效查询所有结果：使用 before 单向分段策略，避免翻页
 
         策略：
-        1. 先获取数据总数量和最大时间范围
-        2. 使用二分查找确定时间分界点
-        3. 每个时间分片单独查询（每片最多 10000 条）
-        4. 合并所有结果并去重
+        1. 先获取数据的最大(lastupdatetime)时间点
+        2. 使用 before 从最大时间往前查，每次最多 10000 条
+        3. 每批记录本批中最小的 lastupdatetime，作为下次查询的 before 值
+        4. 直到某批数据不足 10000 条，说明查完了
+        5. 合并所有结果并去重
 
         Args:
             query: FOFA 查询语句
@@ -349,33 +350,29 @@ class FofaClient:
 
         size_per_query = 10000
 
-        first_query = f'{query} after="2020-01-01" lastupdatetimeasc="true"'
-        stats = self.search(first_query, size=1, skip=0, fields=fields)
+        stats = self.search(f'{query} lastupdatetimeasc="true"', size=1, skip=0, fields=fields)
         min_timestamp = stats.results[0].lastupdatetime if stats.results else ""
 
-        stats = self.search(f'{query} after="2020-01-01" lastupdatetimedesc="true"', size=1, skip=0, fields=fields)
+        stats = self.search(f'{query} lastupdatetimedesc="true"', size=1, skip=0, fields=fields)
         max_timestamp = stats.results[0].lastupdatetime if stats.results else ""
 
-        if not min_timestamp or not max_timestamp:
+        if not max_timestamp:
             stats = self.search(query, size=10000, skip=0, fields=fields)
             return self._deduplicate_results(stats.results)
 
-        time_points = self._binary_search_time_points(
-            query, min_timestamp, max_timestamp, size_per_query, fields
-        )
-
-        time_points = [min_timestamp] + time_points + [max_timestamp]
-
-        total_slices = len(time_points) - 1
+        before_time = max_timestamp
+        batch_num = 0
         fetched = 0
 
-        for i in range(total_slices):
-            slice_start = time_points[i]
-            slice_end = time_points[i + 1]
-
-            time_query = f'{query} after="{slice_start}" before="{slice_end}"'
+        while True:
+            batch_num += 1
+            time_query = f'{query} before="{before_time}"'
             slice_stats = self.search(time_query, size=size_per_query, skip=0, fields=fields)
 
+            if not slice_stats.results:
+                break
+
+            batch_min_time = None
             for r in slice_stats.results:
                 if r.host and r.host not in seen_hosts:
                     seen_hosts.add(r.host)
@@ -391,13 +388,22 @@ class FofaClient:
                             results=all_results[:max_size]
                         )
 
+                if r.lastupdatetime:
+                    if batch_min_time is None or r.lastupdatetime < batch_min_time:
+                        batch_min_time = r.lastupdatetime
+
             if progress_callback:
-                progress_callback(fetched, total_slices, f"时间片 {i+1}/{total_slices}")
+                progress_callback(fetched, batch_num, f"批次 {batch_num}")
 
             time.sleep(0.3)
 
             if len(slice_stats.results) < size_per_query:
-                continue
+                break
+
+            if batch_min_time and batch_min_time < before_time:
+                before_time = batch_min_time
+            else:
+                break
 
         return SearchStats(total=len(all_results), unique_ips=len(unique_ips), results=all_results)
 
