@@ -394,6 +394,8 @@ class FofaClient:
 
             batch_num += 1
             print_progress(f"批次 {batch_num}")
+            if batch_min_time:
+                print(f"\n  [*] 分界时间: {batch_min_time}")
 
             if len(slice_stats.results) < 10000:
                 break
