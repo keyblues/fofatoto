@@ -587,20 +587,19 @@ def main():
 
         if limit_value > 10000 or is_max:
             max_size = 0 if is_max else limit_value
+            if args.full:
+                print(f"[*] 搜索全部数据（不止一年）")
+            if args.verbose:
+                print(f"[*] 目标: {int(args.fill*100)}%")
+            stats = client.search_all_efficient(
+                args.query,
+                max_size=max_size,
+                fields=args.fields,
+                fill_percent=args.fill,
+                full=args.full,
+            )
         else:
-            max_size = limit_value
-
-        if args.full:
-            print(f"[*] 搜索全部数据（不止一年）")
-        if args.verbose:
-            print(f"[*] 目标: {int(args.fill*100)}%")
-        stats = client.search_all_efficient(
-            args.query,
-            max_size=max_size,
-            fields=args.fields,
-            fill_percent=args.fill,
-            full=args.full,
-        )
+            stats = client.search(args.query, size=limit_value, fields=args.fields, full=args.full)
 
         results = stats.results
 
