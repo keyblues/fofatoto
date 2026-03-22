@@ -320,7 +320,7 @@ class FofaClient:
         unique_ips = set()
         api_used = 0
         total_estimated = 0
-        bar_width = 30
+        bar_width = 25
 
         def print_progress(msg=""):
             if total_estimated <= 0:
@@ -328,16 +328,15 @@ class FofaClient:
             fetched = len(all_results)
             percent = fetched / total_estimated
             filled = int(bar_width * percent)
-            bar = "=" * filled + ">" + " " * (bar_width - filled - 1) if filled < bar_width else "=" * bar_width
-            print(f"\r  [{bar}] {fetched:,}/{target_count:,} {msg}", end="", flush=True)
+            bar = "=" * filled + "-" + " " * (bar_width - filled - 1) if filled < bar_width else "=" * bar_width
+            print(f"\r  [{bar}] {percent*100:5.1f}% | {fetched:>6}/{target_count:<6} | 配额: {api_used:>6} | {msg}", end="", flush=True)
 
         def print_done():
             percent = int(len(all_results) / total_estimated * 100) if total_estimated > 0 else 0
             print()
-            print(f"  [*] 查询完成 (API消耗: {api_used} 次)")
+            print(f"  [*] 查询完成 (API消耗: {api_used} 配额)")
             print(f"  [*] 获取数据: {len(all_results):,} 条 (覆盖率 ~{percent}%)")
             print(f"  [*] 独立 IP: {len(unique_ips):,}")
-            print(f"  [*] 去重后: {len(all_results):,} 条")
 
         count_stats = self.search(query, size=1, page=1, fields=fields, full=full)
         api_used += 1
