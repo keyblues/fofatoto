@@ -323,13 +323,13 @@ class FofaClient:
         progress_callback: Optional[Callable] = None,
     ) -> SearchStats:
         """
-        高效查询所有结果：使用 before 单向分段策略，避免翻页
+        高效查询所有结果：使用 before 单向分段 + size=1 探测策略
 
         策略：
-        1. 先获取数据的最大(lastupdatetime)时间点
-        2. 使用 before 从最大时间往前查，每次最多 10000 条
-        3. 每批记录本批中最小的 lastupdatetime，作为下次查询的 before 值
-        4. 直到某批数据不足 10000 条，说明查完了
+        1. 获取最大时间点
+        2. 用 size=1 探测当前时间范围内总数
+        3. 如果总数 <= 10000，直接查；否则用二分法细分时间
+        4. 每个分片查满 10000 后继续探测下一个分片
         5. 合并所有结果并去重
 
         Args:
@@ -348,11 +348,6 @@ class FofaClient:
         seen_hosts = set()
         unique_ips = set()
 
-        size_per_query = 10000
-
-        stats = self.search(f'{query} lastupdatetimeasc="true"', size=1, skip=0, fields=fields)
-        min_timestamp = stats.results[0].lastupdatetime if stats.results else ""
-
         stats = self.search(f'{query} lastupdatetimedesc="true"', size=1, skip=0, fields=fields)
         max_timestamp = stats.results[0].lastupdatetime if stats.results else ""
 
@@ -360,49 +355,49 @@ class FofaClient:
             stats = self.search(query, size=10000, skip=0, fields=fields)
             return self._deduplicate_results(stats.results)
 
-        before_time = max_timestamp
-        batch_num = 0
-        fetched = 0
+        time_ranges = [(None, max_timestamp)]
 
-        while True:
-            batch_num += 1
-            time_query = f'{query} before="{before_time}"'
-            slice_stats = self.search(time_query, size=size_per_query, skip=0, fields=fields)
+        while time_ranges:
+            start_time, end_time = time_ranges.pop(0)
 
-            if not slice_stats.results:
-                break
+            if start_time:
+                count_query = f'{query} after="{start_time}" before="{end_time}"'
+            else:
+                count_query = f'{query} before="{end_time}"'
 
-            batch_min_time = None
-            for r in slice_stats.results:
-                if r.host and r.host not in seen_hosts:
-                    seen_hosts.add(r.host)
-                    all_results.append(r)
-                    if r.ip:
-                        unique_ips.add(r.ip)
-                    fetched += 1
+            count_stats = self.search(count_query, size=1, skip=0, fields=fields)
+            total_count = count_stats.total
 
-                    if max_size > 0 and fetched >= max_size:
-                        return SearchStats(
-                            total=fetched,
-                            unique_ips=len(unique_ips),
-                            results=all_results[:max_size]
-                        )
+            if total_count == 0:
+                continue
 
-                if r.lastupdatetime:
-                    if batch_min_time is None or r.lastupdatetime < batch_min_time:
-                        batch_min_time = r.lastupdatetime
-
-            if progress_callback:
-                progress_callback(fetched, batch_num, f"批次 {batch_num}")
+            if total_count <= 10000:
+                slice_stats = self.search(count_query, size=10000, skip=0, fields=fields)
+                for r in slice_stats.results:
+                    if r.host and r.host not in seen_hosts:
+                        seen_hosts.add(r.host)
+                        all_results.append(r)
+                        if r.ip:
+                            unique_ips.add(r.ip)
+                if progress_callback:
+                    progress_callback(len(all_results), total_count, f"查完 {end_time} 范围 ({total_count} 条)")
+            else:
+                mid_time = self._find_midpoint_time(start_time, end_time)
+                if mid_time == start_time or mid_time == end_time:
+                    slice_stats = self.search(count_query, size=10000, skip=0, fields=fields)
+                    for r in slice_stats.results:
+                        if r.host and r.host not in seen_hosts:
+                            seen_hosts.add(r.host)
+                            all_results.append(r)
+                            if r.ip:
+                                unique_ips.add(r.ip)
+                else:
+                    time_ranges.insert(0, (start_time, mid_time))
+                    time_ranges.insert(1, (mid_time, end_time))
 
             time.sleep(0.3)
 
-            if len(slice_stats.results) < size_per_query:
-                break
-
-            if batch_min_time and batch_min_time < before_time:
-                before_time = batch_min_time
-            else:
+            if max_size > 0 and len(all_results) >= max_size:
                 break
 
         return SearchStats(total=len(all_results), unique_ips=len(unique_ips), results=all_results)
