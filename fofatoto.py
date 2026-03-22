@@ -388,7 +388,8 @@ class FofaClient:
             print_progress(f"批次 {batch_num} (新增:{new_count} 重复:{dup_rate:.0f}%)")
 
             if len(all_results) >= target_count:
-                print(f"\r[*] 已达到 {int(fill_percent*100)}% 目标，停止")
+                percent = len(all_results) / total_estimated * 100
+                print(f"\r[*] {GREEN}已达{int(fill_percent*100)}%目标{RESET} ({len(all_results):,}/{total_estimated:,})    ")
                 break
 
             if len(slice_stats.results) < 10000:
