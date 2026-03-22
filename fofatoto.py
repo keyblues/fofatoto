@@ -300,6 +300,7 @@ class FofaClient:
         progress_callback: Optional[Callable] = None,
         fill_percent: float = 0.9,
         api_rate_limit: float = 5.0,
+        full: bool = False,
     ) -> SearchStats:
         """
         高效查询所有结果：使用 after 单向分段策略
@@ -350,7 +351,7 @@ class FofaClient:
             print(f"  [*] 独立 IP: {len(unique_ips):,}")
             print(f"  [*] 去重后: {len(all_results):,} 条")
 
-        count_stats = self.search(f'{query} && after="2000-01-01"', size=1, page=1, fields=fields)
+        count_stats = self.search(f'{query} && after="2000-01-01"', size=1, page=1, fields=fields, full=full)
         api_used += 1
         total_estimated = count_stats.total
 
@@ -372,7 +373,7 @@ class FofaClient:
                 print(f"  [*] 已达到 {int(fill_percent*100)}% 目标，停止")
                 break
 
-            count_stats = self.search(f'{query} && after="{after_time}"', size=1, page=1, fields=fields)
+            count_stats = self.search(f'{query} && after="{after_time}"', size=1, page=1, fields=fields, full=full)
             api_used += 1
             range_total = count_stats.total
 
@@ -381,7 +382,7 @@ class FofaClient:
 
             if range_total <= 10000:
                 batch_num += 1
-                slice_stats = self.search(f'{query} && after="{after_time}"', size=10000, page=1, fields=fields)
+                slice_stats = self.search(f'{query} && after="{after_time}"', size=10000, page=1, fields=fields, full=full)
                 api_used += 1
 
                 batch_max_time = None
@@ -555,6 +556,7 @@ def build_parser():
     parser.add_argument("-txt", action="store_true", help="导出 TXT 格式（URL 列表）")
     parser.add_argument("-json", action="store_true", help="导出 JSON 格式")
     parser.add_argument("-f", "--fields", help="指定查询字段，默认为 host,ip,port,protocol,domain,title,server,country,city", default="host,ip,port,protocol,domain,title,server,country,city")
+    parser.add_argument("--full", action="store_true", help="搜索全部数据（不止一年）")
     parser.add_argument("-v", "--verbose", action="store_true", help="显示详细信息")
     return parser
 
@@ -622,13 +624,16 @@ def main():
         if is_max or is_large or args.all:
             actual_limit = 0 if is_max else limit_value
             if args.verbose:
-                print(f"[*] 使用高效 before 模式查询...")
+                print(f"[*] 使用高效 after 模式查询...")
                 print(f"[*] 完成百分比: {int(args.fill*100)}%")
+                if args.full:
+                    print(f"[*] 搜索全部数据（不止一年）")
             stats = client.search_all_efficient(
                 args.query,
                 max_size=actual_limit,
                 fields=args.fields,
                 fill_percent=args.fill,
+                full=args.full,
             )
         else:
             stats = client.search(args.query, size=args.limit, fields=args.fields)
