@@ -383,11 +383,13 @@ class FofaClient:
             if not slice_stats.results:
                 break
 
+            new_count = 0
             batch_min_time = None
             for r in slice_stats.results:
                 if r.host and r.host not in seen_hosts:
                     seen_hosts.add(r.host)
                     all_results.append(r)
+                    new_count += 1
                     if r.ip:
                         unique_ips.add(r.ip)
                 if r.lastupdatetime:
@@ -395,7 +397,8 @@ class FofaClient:
                         batch_min_time = r.lastupdatetime
 
             batch_num += 1
-            print_progress(f"批次 {batch_num}")
+            dup_rate = (len(slice_stats.results) - new_count) / len(slice_stats.results) * 100 if len(slice_stats.results) > 0 else 0
+            print_progress(f"批次 {batch_num} (新增:{new_count} 重复:{dup_rate:.0f}%)")
 
             if len(slice_stats.results) < 10000:
                 break
