@@ -382,7 +382,7 @@ class FofaClient:
             if not slice_stats.results:
                 break
 
-            batch_max_time = None
+            batch_min_time = None
             for r in slice_stats.results:
                 if r.host and r.host not in seen_hosts:
                     seen_hosts.add(r.host)
@@ -390,8 +390,8 @@ class FofaClient:
                     if r.ip:
                         unique_ips.add(r.ip)
                 if r.lastupdatetime:
-                    if batch_max_time is None or r.lastupdatetime > batch_max_time:
-                        batch_max_time = r.lastupdatetime
+                    if batch_min_time is None or r.lastupdatetime < batch_min_time:
+                        batch_min_time = r.lastupdatetime
 
             batch_num += 1
             print_progress(f"批次 {batch_num}")
@@ -399,7 +399,7 @@ class FofaClient:
             if len(slice_stats.results) < 10000:
                 break
 
-            before_time = batch_max_time
+            before_time = batch_min_time
 
             time.sleep(api_rate_limit)
 
