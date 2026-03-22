@@ -329,7 +329,7 @@ class FofaClient:
             percent = fetched / total_estimated
             filled = int(bar_width * percent)
             bar = "=" * filled + "-" + " " * (bar_width - filled - 1) if filled < bar_width else "=" * bar_width
-            print(f"\r  [{bar}] {percent*100:5.1f}% | {fetched:>6}/{target_count:<6} | 配额: {api_used:>6} | {msg}", end="", flush=True)
+            print(f"\r[{bar}] {percent*100:5.1f}% | {fetched:>6}/{target_count:<6} | 配额: {api_used:>6} | {msg}", end="", flush=True)
 
         def print_done():
             percent = int(len(all_results) / total_estimated * 100) if total_estimated > 0 else 0
