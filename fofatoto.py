@@ -312,6 +312,8 @@ class FofaClient:
         """
         if fields is None:
             fields = "host,ip,port,protocol,domain,title,server,country,city,lastupdatetime"
+        elif "lastupdatetime" not in fields:
+            fields += ",lastupdatetime"
 
         all_results = []
         seen_hosts = set()
@@ -388,6 +390,7 @@ class FofaClient:
             batch_num += 1
             dup_rate = (len(slice_stats.results) - new_count) / len(slice_stats.results) * 100 if len(slice_stats.results) > 0 else 0
             print_progress(f"批次 {batch_num} (新增:{new_count} 重复:{dup_rate:.0f}%)")
+            print(f"\n  [*] 分界: {batch_min_time}", end="")
 
             if len(slice_stats.results) < 10000:
                 break
