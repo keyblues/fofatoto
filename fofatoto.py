@@ -360,11 +360,6 @@ class FofaClient:
         batch_num = 0
 
         while True:
-            if len(all_results) >= target_count:
-                print()
-                print(f"[*] 已达到 {int(fill_percent*100)}% 目标，停止")
-                break
-
             if before_time:
                 range_query = f'{query} && before="{before_time}"'
             else:
@@ -392,6 +387,11 @@ class FofaClient:
             batch_num += 1
             dup_rate = (len(slice_stats.results) - new_count) / len(slice_stats.results) * 100 if len(slice_stats.results) > 0 else 0
             print_progress(f"批次 {batch_num} (新增:{new_count} 重复:{dup_rate:.0f}%)")
+
+            if len(all_results) >= target_count:
+                print()
+                print(f"[*] 已达到 {int(fill_percent*100)}% 目标，停止")
+                break
 
             if len(slice_stats.results) < 10000:
                 break
