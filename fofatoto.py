@@ -292,33 +292,6 @@ class FofaClient:
         except:
             return 0
 
-    def search_by_time_range(
-        self,
-        query: str,
-        start_time: str,
-        end_time: str,
-        size: int = 10000,
-        fields: Optional[str] = None,
-    ) -> SearchStats:
-        """
-        使用 after/before 时间范围查询（每次最多 10000 条）
-
-        Args:
-            query: 原始 FOFA 查询语句
-            start_time: 开始时间（RFC 3339 格式，如 "2024-01-01T00:00:00"）
-            end_time: 结束时间
-            size: 返回数量（最大 10000）
-            fields: 返回字段
-
-        Returns:
-            SearchStats 对象
-        """
-        if fields is None:
-            fields = "host,ip,port,protocol,domain,title,server,country,city,lastupdatetime"
-
-        time_query = f'{query} && after="{start_time}" && before="{end_time}"'
-        return self.search(time_query, size=size, page=1, fields=fields)
-
     def search_all_efficient(
         self,
         query: str,
@@ -329,14 +302,13 @@ class FofaClient:
         api_rate_limit: float = 5.0,
     ) -> SearchStats:
         """
-        高效查询所有结果：使用 before 单向分段策略
+        高效查询所有结果：使用 after 单向分段策略
 
         策略：
-        1. 获取最大时间点
-        2. 用 before 从最大时间往前查，每次最多 10000 条
-        3. 每批记录本批中最小的 lastupdatetime，作为下次查询的 before 值
-        4. 直到某批数据不足 10000 条或达到目标数量
-        5. 合并所有结果并去重
+        1. 用 after 从最早时间开始查，每次最多 10000 条
+        2. 每批记录本批中最大的 lastupdatetime，作为下一批的 after 值
+        3. 直到某批数据不足 10000 条或达到目标数量
+        4. 合并所有结果并去重
 
         Args:
             query: FOFA 查询语句
@@ -378,17 +350,7 @@ class FofaClient:
             print(f"  [*] 独立 IP: {len(unique_ips):,}")
             print(f"  [*] 去重后: {len(all_results):,} 条")
 
-        stats = self.search(f'{query} && lastupdatetimedesc="true"', size=1, page=1, fields=fields)
-        api_used += 1
-        max_timestamp = stats.results[0].lastupdatetime if stats.results else ""
-
-        if not max_timestamp:
-            stats = self.search(query, size=10000, page=1, fields=fields)
-            api_used += 1
-            print_done()
-            return self._deduplicate_results(stats.results)
-
-        count_stats = self.search(f'{query} && before="{max_timestamp}"', size=1, page=1, fields=fields)
+        count_stats = self.search(f'{query} && after="2000-01-01"', size=1, page=1, fields=fields)
         api_used += 1
         total_estimated = count_stats.total
 
@@ -399,19 +361,18 @@ class FofaClient:
         target_count = int(total_estimated * fill_percent)
         print(f"\n  [*] 匹配总量: {total_estimated:,}")
         print(f"  [*] 目标数量: {target_count:,} ({int(fill_percent*100)}%)")
-        print(f"  [*] 时间范围: ~ {max_timestamp}")
         print_progress("开始查询...")
 
-        before_time = max_timestamp
+        after_time = "2000-01-01"
         batch_num = 0
 
-        while before_time:
+        while after_time:
             if len(all_results) >= target_count:
                 print()
                 print(f"  [*] 已达到 {int(fill_percent*100)}% 目标，停止")
                 break
 
-            count_stats = self.search(f'{query} && before="{before_time}"', size=1, page=1, fields=fields)
+            count_stats = self.search(f'{query} && after="{after_time}"', size=1, page=1, fields=fields)
             api_used += 1
             range_total = count_stats.total
 
@@ -420,31 +381,31 @@ class FofaClient:
 
             if range_total <= 10000:
                 batch_num += 1
-                slice_stats = self.search(f'{query} && before="{before_time}"', size=10000, page=1, fields=fields)
+                slice_stats = self.search(f'{query} && after="{after_time}"', size=10000, page=1, fields=fields)
                 api_used += 1
 
-                batch_min_time = None
+                batch_max_time = None
                 for r in slice_stats.results:
                     if r.host and r.host not in seen_hosts:
                         seen_hosts.add(r.host)
                         all_results.append(r)
                         if r.ip:
                             unique_ips.add(r.ip)
-                    if r.lastupdatetime and (batch_min_time is None or r.lastupdatetime < batch_min_time):
-                        batch_min_time = r.lastupdatetime
+                    if r.lastupdatetime and (batch_max_time is None or r.lastupdatetime > batch_max_time):
+                        batch_max_time = r.lastupdatetime
 
                 print_progress(f"批次 {batch_num}")
 
                 if len(slice_stats.results) < 10000:
                     break
 
-                if batch_min_time and batch_min_time < before_time:
-                    before_time = batch_min_time
+                if batch_max_time and batch_max_time > after_time:
+                    after_time = batch_max_time
                 else:
                     break
             else:
-                mid_time = self._find_midpoint_time("2000-01-01T00:00:00", before_time)
-                before_time = mid_time
+                mid_time = self._find_midpoint_time(after_time, "2030-01-01")
+                after_time = mid_time
                 print_progress("细分时间...")
                 continue
 
@@ -465,7 +426,7 @@ class FofaClient:
             start_dt = parsedate_to_datetime(start)
             end_dt = parsedate_to_datetime(end)
             mid_dt = start_dt + (end_dt - start_dt) / 2
-            return mid_dt.strftime("%Y-%m-%dT%H:%M:%S")
+            return mid_dt.strftime("%Y-%m-%d")
         except:
             return start
 
