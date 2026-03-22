@@ -349,7 +349,7 @@ class FofaClient:
             return SearchStats(total=0, unique_ips=0, results=[])
 
         target_count = int(total_estimated * fill_percent)
-        print(f"\n  [*] 匹配总量: {total_estimated:,}")
+        print(f"\n[*] 匹配总量: {total_estimated:,}")
         print(f"[*] 目标数量: {target_count:,} ({int(fill_percent*100)}%)")
         print()
         print_progress("开始查询...")
