@@ -376,7 +376,7 @@ class FofaClient:
                 range_query = query
 
             slice_stats = self.search(range_query, size=10000, page=1, fields=fields, full=full)
-            api_used += 1
+            api_used += len(slice_stats.results)
 
             if not slice_stats.results:
                 break
