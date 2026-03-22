@@ -351,10 +351,9 @@ class FofaClient:
             return SearchStats(total=0, unique_ips=0, results=[])
 
         target_count = int(total_estimated * fill_percent)
-        print(f"\n[*] 匹配总量: {total_estimated:,}")
-        print(f"[*] 目标数量: {target_count:,} ({int(fill_percent*100)}%)")
+        print(f"\n[*] 匹配总量: {total_estimated:,} | 目标: {target_count:,} ({int(fill_percent*100)}%)")
         print()
-        print_progress("开始查询...")
+        print_progress("开始...")
 
         before_time = None
         batch_num = 0
@@ -389,8 +388,7 @@ class FofaClient:
             print_progress(f"批次 {batch_num} (新增:{new_count} 重复:{dup_rate:.0f}%)")
 
             if len(all_results) >= target_count:
-                print()
-                print(f"[*] 已达到 {int(fill_percent*100)}% 目标，停止")
+                print(f"\r[*] 已达到 {int(fill_percent*100)}% 目标，停止")
                 break
 
             if len(slice_stats.results) < 10000:
