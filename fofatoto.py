@@ -302,12 +302,13 @@ class FofaClient:
         full: bool = False,
     ) -> SearchStats:
         """
-        高效查询所有结果：使用 before 二分法分段策略
+        高效查询所有结果：使用 before 递进策略
 
         策略：
-        1. 先用 before 试探总数
-        2. 用二分法划分时间范围，直到每个分片 <= 10000 条
-        3. 每个分片单独查询，合并结果并去重
+        1. 用 before 从最新时间往前查，每次最多 10000 条
+        2. 每批记录本批中最大的 lastupdatetime，作为下次查询的 before 值
+        3. 直到某批数据不足 10000 条或达到目标数量
+        4. 合并所有结果并去重
 
         Args:
             query: FOFA 查询语句
@@ -322,9 +323,6 @@ class FofaClient:
         """
         if fields is None:
             fields = "host,ip,port,protocol,domain,title,server,country,city,lastupdatetime"
-
-        from datetime import datetime, timedelta
-        today = datetime.now().strftime("%Y-%m-%d")
 
         all_results = []
         seen_hosts = set()
@@ -351,7 +349,7 @@ class FofaClient:
             print(f"  [*] 独立 IP: {len(unique_ips):,}")
             print(f"  [*] 去重后: {len(all_results):,} 条")
 
-        count_stats = self.search(f'{query} && before="{today}"', size=1, page=1, fields=fields, full=full)
+        count_stats = self.search(query, size=1, page=1, fields=fields, full=full)
         api_used += 1
         total_estimated = count_stats.total
 
@@ -364,57 +362,44 @@ class FofaClient:
         print(f"  [*] 目标数量: {target_count:,} ({int(fill_percent*100)}%)")
         print_progress("开始查询...")
 
-        time_ranges = [(None, today)]
+        before_time = None
         batch_num = 0
 
-        while time_ranges:
+        while True:
             if len(all_results) >= target_count:
                 print()
                 print(f"  [*] 已达到 {int(fill_percent*100)}% 目标，停止")
                 break
 
-            start_time, end_time = time_ranges.pop(0)
-
-            if start_time:
-                range_query = f'{query} && after="{start_time}" && before="{end_time}"'
+            if before_time:
+                range_query = f'{query} && before="{before_time}"'
             else:
-                range_query = f'{query} && before="{end_time}"'
+                range_query = query
 
-            count_stats = self.search(range_query, size=1, page=1, fields=fields, full=full)
+            slice_stats = self.search(range_query, size=10000, page=1, fields=fields, full=full)
             api_used += 1
-            range_total = count_stats.total
 
-            if range_total == 0:
-                continue
+            if not slice_stats.results:
+                break
 
-            if range_total <= 10000:
-                batch_num += 1
-                slice_stats = self.search(range_query, size=10000, page=1, fields=fields, full=full)
-                api_used += 1
+            batch_max_time = None
+            for r in slice_stats.results:
+                if r.host and r.host not in seen_hosts:
+                    seen_hosts.add(r.host)
+                    all_results.append(r)
+                    if r.ip:
+                        unique_ips.add(r.ip)
+                if r.lastupdatetime:
+                    if batch_max_time is None or r.lastupdatetime > batch_max_time:
+                        batch_max_time = r.lastupdatetime
 
-                for r in slice_stats.results:
-                    if r.host and r.host not in seen_hosts:
-                        seen_hosts.add(r.host)
-                        all_results.append(r)
-                        if r.ip:
-                            unique_ips.add(r.ip)
+            batch_num += 1
+            print_progress(f"批次 {batch_num}")
 
-                print_progress(f"批次 {batch_num}")
-            else:
-                mid_time = self._find_midpoint_time(start_time or "2000-01-01", end_time)
-                if mid_time and mid_time != start_time and mid_time != end_time:
-                    time_ranges.insert(0, (start_time, mid_time))
-                    time_ranges.insert(1, (mid_time, end_time))
-                    print_progress("细分时间...")
-                else:
-                    slice_stats = self.search(range_query, size=10000, page=1, fields=fields, full=full)
-                    api_used += 1
-                    for r in slice_stats.results:
-                        if r.host and r.host not in seen_hosts:
-                            seen_hosts.add(r.host)
-                            all_results.append(r)
-                            if r.ip:
-                                unique_ips.add(r.ip)
+            if len(slice_stats.results) < 10000:
+                break
+
+            before_time = batch_max_time
 
             time.sleep(api_rate_limit)
 
@@ -423,19 +408,6 @@ class FofaClient:
 
         print_done()
         return SearchStats(total=len(all_results), unique_ips=len(unique_ips), results=all_results)
-
-    def _find_midpoint_time(self, start: str, end: str) -> str:
-        """找到两个时间的中点时间"""
-        from email.utils import parsedate_to_datetime
-        from datetime import timedelta
-
-        try:
-            start_dt = parsedate_to_datetime(start)
-            end_dt = parsedate_to_datetime(end)
-            mid_dt = start_dt + (end_dt - start_dt) / 2
-            return mid_dt.strftime("%Y-%m-%d")
-        except:
-            return start
 
     def _deduplicate_results(self, results: list) -> SearchStats:
         """去重并统计"""
