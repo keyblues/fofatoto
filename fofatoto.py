@@ -629,7 +629,7 @@ def main():
                 full=args.full,
             )
         else:
-            stats = client.search(args.query, size=limit_value, fields=args.fields)
+            stats = client.search(args.query, size=limit_value, fields=args.fields, full=args.full)
 
         results = stats.results
 
