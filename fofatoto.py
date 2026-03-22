@@ -224,8 +224,9 @@ class FofaClient:
         self,
         query: str,
         size: int = 100,
-        skip: int = 0,
+        page: int = 1,
         fields: Optional[str] = None,
+        full: bool = False,
     ) -> SearchStats:
         """
         执行 FOFA 查询
@@ -233,8 +234,9 @@ class FofaClient:
         Args:
             query: FOFA 查询语句
             size: 返回数量（最大 10000）
-            skip: 跳过前 N 条结果
+            page: 页码（默认为1）
             fields: 返回字段，默认为 host,ip,port,protocol,domain,title,server,country,city
+            full: 是否搜索全部数据（不止一年）
 
         Returns:
             SearchStats 对象，包含结果列表、总匹配数和独立 IP 数
@@ -246,8 +248,10 @@ class FofaClient:
         url = (
             f"{self.base_url}/api/v1/search/all"
             f"?key={self.key}"
-            f"&qbase64={qbase64}&size={size}&skip={skip}&fields={fields}"
+            f"&qbase64={qbase64}&size={size}&page={page}&fields={fields}"
         )
+        if full:
+            url += "&full=true"
 
         try:
             import urllib.request
@@ -313,7 +317,7 @@ class FofaClient:
             fields = "host,ip,port,protocol,domain,title,server,country,city,lastupdatetime"
 
         time_query = f'{query} && after="{start_time}" && before="{end_time}"'
-        return self.search(time_query, size=size, skip=0, fields=fields)
+        return self.search(time_query, size=size, page=1, fields=fields)
 
     def search_all_efficient(
         self,
@@ -374,17 +378,17 @@ class FofaClient:
             print(f"  [*] 独立 IP: {len(unique_ips):,}")
             print(f"  [*] 去重后: {len(all_results):,} 条")
 
-        stats = self.search(f'{query} && lastupdatetimedesc="true"', size=1, skip=0, fields=fields)
+        stats = self.search(f'{query} && lastupdatetimedesc="true"', size=1, page=1, fields=fields)
         api_used += 1
         max_timestamp = stats.results[0].lastupdatetime if stats.results else ""
 
         if not max_timestamp:
-            stats = self.search(query, size=10000, skip=0, fields=fields)
+            stats = self.search(query, size=10000, page=1, fields=fields)
             api_used += 1
             print_done()
             return self._deduplicate_results(stats.results)
 
-        count_stats = self.search(f'{query} && before="{max_timestamp}"', size=1, skip=0, fields=fields)
+        count_stats = self.search(f'{query} && before="{max_timestamp}"', size=1, page=1, fields=fields)
         api_used += 1
         total_estimated = count_stats.total
 
@@ -407,7 +411,7 @@ class FofaClient:
                 print(f"  [*] 已达到 {int(fill_percent*100)}% 目标，停止")
                 break
 
-            count_stats = self.search(f'{query} && before="{before_time}"', size=1, skip=0, fields=fields)
+            count_stats = self.search(f'{query} && before="{before_time}"', size=1, page=1, fields=fields)
             api_used += 1
             range_total = count_stats.total
 
@@ -416,7 +420,7 @@ class FofaClient:
 
             if range_total <= 10000:
                 batch_num += 1
-                slice_stats = self.search(f'{query} && before="{before_time}"', size=10000, skip=0, fields=fields)
+                slice_stats = self.search(f'{query} && before="{before_time}"', size=10000, page=1, fields=fields)
                 api_used += 1
 
                 batch_min_time = None
@@ -482,7 +486,7 @@ class FofaClient:
 
     def get_total_count(self, query: str) -> int:
         """获取查询的总匹配数量"""
-        stats = self.search(query, size=1, skip=0, fields="host")
+        stats = self.search(query, size=1, page=1, fields="host")
         return stats.total
 
     def search_all(self, query: str, max_size: int = 1000, page_size: int = 100, fields: Optional[str] = None) -> SearchStats:
@@ -501,11 +505,11 @@ class FofaClient:
         all_results = []
         unique_ips = set()
         total = 0
-        skip = 0
+        page = 1
 
-        while skip < max_size:
-            batch_size = min(page_size, max_size - skip)
-            stats = self.search(query, size=batch_size, skip=skip, fields=fields)
+        while len(all_results) < max_size:
+            batch_size = min(page_size, max_size - len(all_results))
+            stats = self.search(query, size=batch_size, page=page, fields=fields)
 
             if not stats.results:
                 break
@@ -515,7 +519,7 @@ class FofaClient:
             if total == 0:
                 total = stats.total
 
-            skip += len(stats.results)
+            page += 1
 
             time.sleep(0.5)
 
