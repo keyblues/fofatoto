@@ -334,9 +334,9 @@ class FofaClient:
         def print_done():
             percent = int(len(all_results) / total_estimated * 100) if total_estimated > 0 else 0
             print()
-            print(f"  [*] 查询完成 (API消耗: {api_used} 配额)")
-            print(f"  [*] 获取数据: {len(all_results):,} 条 (覆盖率 ~{percent}%)")
-            print(f"  [*] 独立 IP: {len(unique_ips):,}")
+            print(f"[*] 查询完成 (API消耗: {api_used} 配额)")
+            print(f"[*] 获取数据: {len(all_results):,} 条 (覆盖率 ~{percent}%)")
+            print(f"[*] 独立 IP: {len(unique_ips):,}")
 
         count_stats = self.search(query, size=1, page=1, fields=fields, full=full)
         api_used += 1
@@ -350,7 +350,7 @@ class FofaClient:
 
         target_count = int(total_estimated * fill_percent)
         print(f"\n  [*] 匹配总量: {total_estimated:,}")
-        print(f"  [*] 目标数量: {target_count:,} ({int(fill_percent*100)}%)")
+        print(f"[*] 目标数量: {target_count:,} ({int(fill_percent*100)}%)")
         print()
         print_progress("开始查询...")
 
@@ -360,7 +360,7 @@ class FofaClient:
         while True:
             if len(all_results) >= target_count:
                 print()
-                print(f"  [*] 已达到 {int(fill_percent*100)}% 目标，停止")
+                print(f"[*] 已达到 {int(fill_percent*100)}% 目标，停止")
                 break
 
             if before_time:
