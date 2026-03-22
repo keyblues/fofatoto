@@ -384,7 +384,7 @@ class FofaClient:
             print_done()
             return self._deduplicate_results(stats.results)
 
-        count_stats = self.search(f'{query} && lastupdatetimebefore="{max_timestamp}"', size=1, skip=0, fields=fields)
+        count_stats = self.search(f'{query} && before="{max_timestamp}"', size=1, skip=0, fields=fields)
         api_used += 1
         total_estimated = count_stats.total
 
@@ -407,7 +407,7 @@ class FofaClient:
                 print(f"  [*] 已达到 {int(fill_percent*100)}% 目标，停止")
                 break
 
-            count_stats = self.search(f'{query} && lastupdatetimebefore="{before_time}"', size=1, skip=0, fields=fields)
+            count_stats = self.search(f'{query} && before="{before_time}"', size=1, skip=0, fields=fields)
             api_used += 1
             range_total = count_stats.total
 
@@ -416,7 +416,7 @@ class FofaClient:
 
             if range_total <= 10000:
                 batch_num += 1
-                slice_stats = self.search(f'{query} && lastupdatetimebefore="{before_time}"', size=10000, skip=0, fields=fields)
+                slice_stats = self.search(f'{query} && before="{before_time}"', size=10000, skip=0, fields=fields)
                 api_used += 1
 
                 batch_min_time = None
