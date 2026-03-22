@@ -349,11 +349,11 @@ class FofaClient:
 
         size_per_query = 10000
 
-        first_query = f"{query}&&lastupdatetimeasc=true"
+        first_query = f'{query} after="2020-01-01" lastupdatetimeasc="true"'
         stats = self.search(first_query, size=1, skip=0, fields=fields)
         min_timestamp = stats.results[0].lastupdatetime if stats.results else ""
 
-        stats = self.search(f"{query}&&lastupdatetimedesc=true", size=1, skip=0, fields=fields)
+        stats = self.search(f'{query} after="2020-01-01" lastupdatetimedesc="true"', size=1, skip=0, fields=fields)
         max_timestamp = stats.results[0].lastupdatetime if stats.results else ""
 
         if not min_timestamp or not max_timestamp:
@@ -373,7 +373,7 @@ class FofaClient:
             slice_start = time_points[i]
             slice_end = time_points[i + 1]
 
-            time_query = f'{query} && after="{slice_start}" && before="{slice_end}"'
+            time_query = f'{query} after="{slice_start}" before="{slice_end}"'
             slice_stats = self.search(time_query, size=size_per_query, skip=0, fields=fields)
 
             for r in slice_stats.results:
@@ -421,7 +421,7 @@ class FofaClient:
         while stack:
             current_start, current_end = stack.pop()
 
-            test_query = f'{query} && after="{current_start}" && before="{current_end}"'
+            test_query = f'{query} after="{current_start}" before="{current_end}"'
             stats = self.search(test_query, size=target_size, skip=0, fields=fields)
             count = len(stats.results)
 
