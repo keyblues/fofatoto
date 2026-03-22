@@ -585,34 +585,22 @@ def main():
             print(f"[*] 查询: {args.query}")
             print(f"[*] 数量限制: {'无限制(max)' if is_max else limit_value}")
 
-        if is_max:
-            if args.verbose:
-                print(f"[*] 使用高效 before 模式查询...")
-                print(f"[*] 完成百分比: {int(args.fill*100)}%")
-                if args.full:
-                    print(f"[*] 搜索全部数据（不止一年）")
-            stats = client.search_all_efficient(
-                args.query,
-                max_size=0,
-                fields=args.fields,
-                fill_percent=args.fill,
-                full=args.full,
-            )
-        elif limit_value > 10000:
-            if args.verbose:
-                print(f"[*] 使用高效 before 模式查询...")
-                print(f"[*] 完成百分比: {int(args.fill*100)}%")
-                if args.full:
-                    print(f"[*] 搜索全部数据（不止一年）")
-            stats = client.search_all_efficient(
-                args.query,
-                max_size=limit_value,
-                fields=args.fields,
-                fill_percent=args.fill,
-                full=args.full,
-            )
+        if limit_value > 10000 or is_max:
+            max_size = 0 if is_max else limit_value
         else:
-            stats = client.search(args.query, size=limit_value, fields=args.fields, full=args.full)
+            max_size = limit_value
+
+        if args.full:
+            print(f"[*] 搜索全部数据（不止一年）")
+        if args.verbose:
+            print(f"[*] 目标: {int(args.fill*100)}%")
+        stats = client.search_all_efficient(
+            args.query,
+            max_size=max_size,
+            fields=args.fields,
+            fill_percent=args.fill,
+            full=args.full,
+        )
 
         results = stats.results
 
