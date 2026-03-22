@@ -24,6 +24,7 @@ import os
 import sys
 import base64
 import time
+import urllib.request
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Optional, Callable
@@ -194,7 +195,6 @@ class FofaClient:
         query = base64.b64encode(b"test").decode()
         api_url = f"{self.base_url}/api/v1/search/all?key={self.key}&qbase64={query}&size=1"
         try:
-            import urllib.request
             resp = urllib.request.urlopen(api_url, timeout=10)
             data = json.loads(resp.read().decode())
             if data.get("error"):
@@ -211,7 +211,6 @@ class FofaClient:
         """
         api_url = f"{self.base_url}/api/v1/info/my?key={self.key}"
         try:
-            import urllib.request
             resp = urllib.request.urlopen(api_url, timeout=10)
             data = json.loads(resp.read().decode())
             if data.get("error"):
@@ -254,7 +253,6 @@ class FofaClient:
             url += "&full=true"
 
         try:
-            import urllib.request
             resp = urllib.request.urlopen(url, timeout=30)
             data = json.loads(resp.read().decode())
         except Exception as e:
@@ -283,15 +281,6 @@ class FofaClient:
         total = data.get("size", 0)
         return SearchStats(total=total, unique_ips=len(unique_ips), results=results)
 
-    def _parse_time(self, time_str: str) -> int:
-        """解析时间字符串为时间戳"""
-        from email.utils import parsedate_to_datetime
-        try:
-            dt = parsedate_to_datetime(time_str)
-            return int(dt.timestamp())
-        except:
-            return 0
-
     def search_all_efficient(
         self,
         query: str,
@@ -306,7 +295,7 @@ class FofaClient:
 
         策略：
         1. 用 before 从最新时间往前查，每次最多 10000 条
-        2. 每批记录本批中最大的 lastupdatetime，作为下次查询的 before 值
+        2. 每批记录本批中最小的 lastupdatetime，作为下次查询的 before 值
         3. 直到某批数据不足 10000 条或达到目标数量
         4. 合并所有结果并去重
 
@@ -409,6 +398,8 @@ class FofaClient:
                     dt = datetime.strptime(batch_min_time, "%Y-%m-%d %H:%M:%S")
                     dt -= timedelta(seconds=1)
                     before_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    before_time = None
                 except:
                     before_time = batch_min_time
             else:
@@ -421,26 +412,6 @@ class FofaClient:
 
         print_done()
         return SearchStats(total=len(all_results), unique_ips=len(unique_ips), results=all_results)
-
-    def _deduplicate_results(self, results: list) -> SearchStats:
-        """去重并统计"""
-        seen_hosts = set()
-        unique_ips = set()
-        deduped = []
-
-        for r in results:
-            if r.host and r.host not in seen_hosts:
-                seen_hosts.add(r.host)
-                deduped.append(r)
-                if r.ip:
-                    unique_ips.add(r.ip)
-
-        return SearchStats(total=len(deduped), unique_ips=len(unique_ips), results=deduped)
-
-    def get_total_count(self, query: str) -> int:
-        """获取查询的总匹配数量"""
-        stats = self.search(query, size=1, page=1, fields="host")
-        return stats.total
 
 
 # ============ 导出相关 ============
