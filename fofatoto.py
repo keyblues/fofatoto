@@ -354,10 +354,17 @@ class FofaClient:
         api_used = 0
         total_estimated = 0
 
-        def default_callback(fetched, total, msg):
-            print(f"[*] {msg} | 已获取: {fetched} | API消耗: {api_used} 次")
+        def print_status(msg):
+            percent = f"{int(len(all_results)/total_estimated*100)}%" if total_estimated > 0 else "0%"
+            print(f"  [*] {msg} | 获取: {len(all_results):>6} / {total_estimated:>6} ({percent}) | API: {api_used} 次")
 
-        cb = progress_callback or default_callback
+        def print_done():
+            percent = f"{int(len(all_results)/total_estimated*100)}%" if total_estimated > 0 else "0%"
+            print(f"\n  [*] 查询完成")
+            print(f"  [*] 获取数据: {len(all_results):,} 条 (估计覆盖率 {percent})")
+            print(f"  [*] 独立 IP: {len(unique_ips):,}")
+            print(f"  [*] API 消耗: {api_used} 次")
+            print(f"  [*] 去重后: {len(all_results):,} 条")
 
         stats = self.search(f'{query} lastupdatetimedesc="true"', size=1, skip=0, fields=fields)
         api_used += 1
@@ -366,7 +373,7 @@ class FofaClient:
         if not max_timestamp:
             stats = self.search(query, size=10000, skip=0, fields=fields)
             api_used += 1
-            cb(len(all_results), total_estimated, "查完了")
+            print_done()
             return self._deduplicate_results(stats.results)
 
         count_stats = self.search(f'{query} before="{max_timestamp}"', size=1, skip=0, fields=fields)
@@ -374,17 +381,21 @@ class FofaClient:
         total_estimated = count_stats.total
 
         if total_estimated == 0:
-            cb(0, 0, "无匹配数据")
+            print("  [*] 无匹配数据")
             return SearchStats(total=0, unique_ips=0, results=[])
 
         target_count = int(total_estimated * fill_percent)
-        cb(0, total_estimated, f"预计目标: {target_count} 条 ({int(fill_percent*100)}%)")
+        print(f"\n  [*] 匹配总量: {total_estimated:,}")
+        print(f"  [*] 目标数量: {target_count:,} ({int(fill_percent*100)}%)")
+        print(f"  [*] 时间范围: ~ {max_timestamp}")
+        print_status("开始查询...")
 
         time_ranges = [(None, max_timestamp)]
+        batch_num = 0
 
         while time_ranges:
             if len(all_results) >= target_count:
-                cb(len(all_results), total_estimated, f"已达到 {int(fill_percent*100)}% 目标，停止查询")
+                print_status(f"已达到 {int(fill_percent*100)}% 目标，停止")
                 break
 
             start_time, end_time = time_ranges.pop(0)
@@ -402,6 +413,7 @@ class FofaClient:
                 continue
 
             if range_total <= 10000:
+                batch_num += 1
                 slice_stats = self.search(count_query, size=10000, skip=0, fields=fields)
                 api_used += 1
                 for r in slice_stats.results:
@@ -410,10 +422,11 @@ class FofaClient:
                         all_results.append(r)
                         if r.ip:
                             unique_ips.add(r.ip)
-                cb(len(all_results), total_estimated, f"查完 {end_time} ({range_total} 条)")
+                print_status(f"批次 {batch_num} 完成 ({range_total} 条)")
             else:
                 mid_time = self._find_midpoint_time(start_time, end_time)
                 if mid_time == start_time or mid_time == end_time:
+                    batch_num += 1
                     slice_stats = self.search(count_query, size=10000, skip=0, fields=fields)
                     api_used += 1
                     for r in slice_stats.results:
@@ -422,6 +435,7 @@ class FofaClient:
                             all_results.append(r)
                             if r.ip:
                                 unique_ips.add(r.ip)
+                    print_status(f"批次 {batch_num} 完成 ({range_total} 条)")
                 else:
                     time_ranges.insert(0, (start_time, mid_time))
                     time_ranges.insert(1, (mid_time, end_time))
@@ -431,7 +445,7 @@ class FofaClient:
             if max_size > 0 and len(all_results) >= max_size:
                 break
 
-        cb(len(all_results), total_estimated, f"查询完成 (API消耗: {api_used} 次)")
+        print_done()
         return SearchStats(total=len(all_results), unique_ips=len(unique_ips), results=all_results)
 
     def _binary_search_time_points(
