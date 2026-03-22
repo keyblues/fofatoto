@@ -351,6 +351,7 @@ class FofaClient:
         target_count = int(total_estimated * fill_percent)
         print(f"\n  [*] 匹配总量: {total_estimated:,}")
         print(f"  [*] 目标数量: {target_count:,} ({int(fill_percent*100)}%)")
+        print()
         print_progress("开始查询...")
 
         before_time = None
