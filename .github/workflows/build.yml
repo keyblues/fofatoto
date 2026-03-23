@@ -35,11 +35,6 @@ jobs:
             --output-filename=fofatoto.exe `
             fofatoto.py
 
-      - name: Compress with UPX
-        run: |
-          upx -9 fofatoto.exe -o fofatoto.upx
-          mv fofatoto.upx fofatoto.exe
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
