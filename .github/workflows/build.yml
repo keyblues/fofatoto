@@ -7,108 +7,116 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-windows:
+  build-windows-amd64:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install dependencies
+        run: pip install nuitka zstandard
+      - name: Build
         run: |
-          pip install nuitka zstandard
-
-      - name: Build Windows executable
-        run: |
-          python -m nuitka --onefile `
-            --lto=yes `
-            --remove-output `
-            --assume-yes-for-downloads `
-            --python-flag=no_docstrings `
-            --noinclude-pytest-mode=nofollow `
-            --noinclude-setuptools-mode=nofollow `
-            --noinclude-unittest-mode=nofollow `
-            --noinclude-pydoc-mode=nofollow `
-            --windows-disable-console `
-            --output-filename=fofatoto.exe `
-            fofatoto.py
-
-      - name: Upload artifact
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --windows-disable-console --output-filename=fofatoto.exe fofatoto.py
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: fofatoto-windows
+          name: fofatoto-windows-amd64
           path: fofatoto.exe
 
-  build-linux:
+  build-windows-arm64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install nuitka zstandard
+      - name: Build
+        run: |
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --windows-disable-console --output-filename=fofatoto.exe fofatoto.py
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: fofatoto-windows-arm64
+          path: fofatoto.exe
+
+  build-linux-amd64:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install dependencies
+        run: pip install nuitka zstandard
+      - name: Build
         run: |
-          pip install nuitka zstandard
-
-      - name: Build Linux executable
-        run: |
-          python -m nuitka --onefile \
-            --lto=yes \
-            --remove-output \
-            --assume-yes-for-downloads \
-            --python-flag=no_docstrings \
-            --noinclude-pytest-mode=nofollow \
-            --noinclude-setuptools-mode=nofollow \
-            --noinclude-unittest-mode=nofollow \
-            --noinclude-pydoc-mode=nofollow \
-            --output-filename=fofatoto \
-            fofatoto.py
-
-      - name: Upload artifact
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: fofatoto-linux
+          name: fofatoto-linux-amd64
           path: fofatoto
 
-  build-macos:
+  build-linux-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install nuitka zstandard
+      - name: Build
+        run: |
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: fofatoto-linux-arm64
+          path: fofatoto
+
+  build-macos-amd64:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
       - name: Install dependencies
+        run: pip install nuitka zstandard
+      - name: Build
         run: |
-          pip install nuitka zstandard
-
-      - name: Build macOS executable
-        run: |
-          python -m nuitka --onefile \
-            --lto=yes \
-            --remove-output \
-            --assume-yes-for-downloads \
-            --python-flag=no_docstrings \
-            --noinclude-pytest-mode=nofollow \
-            --noinclude-setuptools-mode=nofollow \
-            --noinclude-unittest-mode=nofollow \
-            --noinclude-pydoc-mode=nofollow \
-            --output-filename=fofatoto \
-            fofatoto.py
-
-      - name: Upload artifact
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: fofatoto-macos
+          name: fofatoto-macos-amd64
+          path: fofatoto
+
+  build-macos-arm64:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install nuitka zstandard
+      - name: Build
+        run: |
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: fofatoto-macos-arm64
           path: fofatoto
 
   release:
-    needs: [build-windows, build-linux, build-macos]
+    needs: [build-windows-amd64, build-windows-arm64, build-linux-amd64, build-linux-arm64, build-macos-amd64, build-macos-arm64]
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     permissions:
@@ -127,19 +135,25 @@ jobs:
         with:
           path: artifacts
 
-      - name: Rename artifacts
+      - name: Rename
         run: |
-          mv artifacts/fofatoto-windows/fofatoto.exe artifacts/
-          mv artifacts/fofatoto-linux/fofatoto artifacts/fofatoto-linux
-          mv artifacts/fofatoto-macos/fofatoto artifacts/fofatoto-macos
+          mv artifacts/fofatoto-windows-amd64/fofatoto.exe artifacts/fofatoto-windows-amd64.exe
+          mv artifacts/fofatoto-windows-arm64/fofatoto.exe artifacts/fofatoto-windows-arm64.exe
+          mv artifacts/fofatoto-linux-amd64/fofatoto artifacts/fofatoto-linux-amd64
+          mv artifacts/fofatoto-linux-arm64/fofatoto artifacts/fofatoto-linux-arm64
+          mv artifacts/fofatoto-macos-amd64/fofatoto artifacts/fofatoto-macos-amd64
+          mv artifacts/fofatoto-macos-arm64/fofatoto artifacts/fofatoto-macos-arm64
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/fofatoto.exe
-            artifacts/fofatoto-linux
-            artifacts/fofatoto-macos
+            artifacts/fofatoto-windows-amd64.exe
+            artifacts/fofatoto-windows-arm64.exe
+            artifacts/fofatoto-linux-amd64
+            artifacts/fofatoto-linux-arm64
+            artifacts/fofatoto-macos-amd64
+            artifacts/fofatoto-macos-arm64
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
