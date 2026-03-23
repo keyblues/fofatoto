@@ -45,7 +45,20 @@ def highlight(text: str, value: str) -> str:
 
 # ============ 配置相关 ============
 
-CONFIG_FILE = Path(__file__).parent / "config.json"
+def get_config_dir():
+    """获取配置目录（支持 Nuitka onefile 模式）"""
+    import os
+    nuitka_parent = os.environ.get('NUITKA_ONEFILE_PARENT')
+    if nuitka_parent:
+        return Path(nuitka_parent).parent
+    script_dir = Path(sys.argv[0] if sys.argv[0] else __file__).resolve().parent
+    if str(script_dir).startswith('/tmp') or str(script_dir).startswith('/var'):
+        exe_dir = Path(sys.executable).parent
+        if not str(exe_dir).startswith('/tmp'):
+            return exe_dir
+    return script_dir
+
+CONFIG_FILE = get_config_dir() / "config.json"
 
 
 @dataclass
@@ -306,9 +319,9 @@ class FofaClient:
         all_results = []
         seen_hosts = set()
         unique_ips = set()
-        api_used = 0
         total_estimated = 0
         bar_width = 25
+        total_quota_used = 0
 
         def print_progress(msg=""):
             if total_estimated <= 0:
@@ -318,17 +331,17 @@ class FofaClient:
             filled = int(bar_width * percent)
             bar = f"{GREEN}{'=' * filled}{RESET}{'~' if filled < bar_width else ''}{' ' * (bar_width - filled - 1)}"
             pct_color = YELLOW if percent < 50 else GREEN
-            print(f"\r[{bar}] {pct_color}{percent*100:5.1f}%{RESET} | {GREEN}{fetched:>6}{RESET}/{total_estimated:<6} | {RED}配额:{api_used:>6}{RESET} | {msg}", end="", flush=True)
+            print(f"\r[{bar}] {pct_color}{percent*100:5.1f}%{RESET} | {GREEN}{fetched:>6}{RESET}/{total_estimated:<6} | {RED}配额:{total_quota_used:>6}{RESET} | {msg}", end="", flush=True)
 
         def print_done():
             percent = int(len(all_results) / total_estimated * 100) if total_estimated > 0 else 0
             print()
-            print(f"[*] {GREEN}查询完成{RESET} (API消耗: {RED}{api_used}{RESET} 配额)")
+            print(f"[*] {GREEN}查询完成{RESET} (API消耗: {RED}{total_quota_used}{RESET} 配额)")
             print(f"[*] 获取数据: {GREEN}{len(all_results):,}{RESET} 条 (覆盖率 ~{percent}%)")
             print(f"[*] 独立 IP: {CYAN}{len(unique_ips):,}{RESET}")
 
         count_stats = self.search(query, size=1, page=1, fields=fields, full=full)
-        api_used += 1
+        total_quota_used += 1
         total_estimated = count_stats.total
 
         time.sleep(api_rate_limit)
@@ -344,62 +357,72 @@ class FofaClient:
 
         before_time = None
         batch_num = 0
+        interrupted = False
 
-        while True:
-            if before_time:
-                range_query = f'{query} && before="{before_time}"'
-            else:
-                range_query = query
+        try:
+            while True:
+                if before_time:
+                    range_query = f'{query} && before="{before_time}"'
+                else:
+                    range_query = query
 
-            slice_stats = self.search(range_query, size=10000, page=1, fields=fields, full=full)
-            api_used += 1
+                slice_stats = self.search(range_query, size=10000, page=1, fields=fields, full=full)
+                total_quota_used += 10000
 
-            if not slice_stats.results:
-                break
+                if not slice_stats.results:
+                    break
 
-            new_count = 0
-            batch_min_time = None
-            for r in slice_stats.results:
-                if r.host and r.host not in seen_hosts:
-                    seen_hosts.add(r.host)
-                    all_results.append(r)
-                    new_count += 1
-                    if r.ip:
-                        unique_ips.add(r.ip)
-                if r.lastupdatetime:
-                    if batch_min_time is None or r.lastupdatetime < batch_min_time:
-                        batch_min_time = r.lastupdatetime
+                new_count = 0
+                batch_min_time = None
+                for r in slice_stats.results:
+                    if r.host and r.host not in seen_hosts:
+                        seen_hosts.add(r.host)
+                        all_results.append(r)
+                        new_count += 1
+                        if r.ip:
+                            unique_ips.add(r.ip)
+                    if r.lastupdatetime:
+                        if batch_min_time is None or r.lastupdatetime < batch_min_time:
+                            batch_min_time = r.lastupdatetime
 
-            batch_num += 1
-            dup_rate = (len(slice_stats.results) - new_count) / len(slice_stats.results) * 100 if len(slice_stats.results) > 0 else 0
-            print_progress(f"批次 {batch_num} (新增:{new_count} 重复:{dup_rate:.0f}%)")
+                batch_num += 1
+                dup_rate = (len(slice_stats.results) - new_count) / len(slice_stats.results) * 100 if len(slice_stats.results) > 0 else 0
+                print_progress(f"批次 {batch_num} (新增:{new_count} 重复:{dup_rate:.0f}%)")
 
-            if len(all_results) >= target_count:
-                percent = len(all_results) / total_estimated * 100
-                print(f"\r[*] {GREEN}已达{int(fill_percent*100)}%目标{RESET} ({len(all_results):,}/{total_estimated:,})    ")
-                break
+                if len(all_results) >= target_count:
+                    percent = len(all_results) / total_estimated * 100
+                    print(f"\r[*] {GREEN}已达{int(fill_percent*100)}%目标{RESET} ({len(all_results):,}/{total_estimated:,})    ")
+                    break
 
-            if len(slice_stats.results) < 10000:
-                break
+                if len(slice_stats.results) < 10000:
+                    break
 
-            if batch_min_time:
-                try:
-                    dt = datetime.strptime(batch_min_time, "%Y-%m-%d %H:%M:%S")
-                    dt -= timedelta(seconds=1)
-                    before_time = dt.strftime("%Y-%m-%d %H:%M:%S")
-                except ValueError:
+                if batch_min_time:
+                    try:
+                        dt = datetime.strptime(batch_min_time, "%Y-%m-%d %H:%M:%S")
+                        dt -= timedelta(seconds=1)
+                        before_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        before_time = None
+                    except Exception:
+                        before_time = batch_min_time
+                else:
                     before_time = None
-                except Exception:
-                    before_time = batch_min_time
-            else:
-                before_time = None
 
-            time.sleep(api_rate_limit)
+                time.sleep(api_rate_limit)
 
-            if max_size > 0 and len(all_results) >= max_size:
-                break
+                if max_size > 0 and len(all_results) >= max_size:
+                    break
+        except KeyboardInterrupt:
+            interrupted = True
+            print()
+            print(f"[*] 已中断，保存已获取的数据...")
 
-        print_done()
+        if interrupted:
+            print(f"[*] 获取数据: {GREEN}{len(all_results):,}{RESET} 条")
+            print(f"[*] 独立 IP: {CYAN}{len(unique_ips):,}{RESET}")
+        else:
+            print_done()
         return SearchStats(total=len(all_results), unique_ips=len(unique_ips), results=all_results)
 
 
@@ -685,13 +708,6 @@ def main():
 
     except FofaAPIError as e:
         print(f"[-] API 错误: {e}", file=sys.stderr)
-        sys.exit(1)
-    except KeyboardInterrupt:
-        if results:
-            print("\n[*] 正在保存已获取的数据...")
-            export_results(results, args)
-        else:
-            print("\n[-] 已取消")
         sys.exit(1)
     except Exception as e:
         print(f"[-] 错误: {e}", file=sys.stderr)
