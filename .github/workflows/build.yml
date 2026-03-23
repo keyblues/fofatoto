@@ -7,18 +7,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux_amd64
-          - platform: linux_arm64
-          - platform: macos_amd64
-          - platform: macos_arm64
-
-    runs-on: ${{ matrix.platform == 'linux_amd64' || matrix.platform == 'linux_arm64' && 'ubuntu-latest' || matrix.platform == 'macos_amd64' && 'macos-latest' || 'macos-14' }}
-
   build-windows:
     runs-on: windows-latest
     steps:
