@@ -1,0 +1,114 @@
+name: Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install nuitka zstandard upx
+
+      - name: Build Windows executable
+        run: |
+          python -m nuitka --onefile `
+            --lto=yes `
+            --remove-output `
+            --assume-yes-for-downloads `
+            --python-flag=no_docstrings `
+            --noinclude-pytest-mode=nofollow `
+            --noinclude-setuptools-mode=nofollow `
+            --noinclude-unittest-mode=nofollow `
+            --noinclude-pydoc-mode=nofollow `
+            --windows-disable-console `
+            --output-filename=fofatoto.exe `
+            fofatoto.py
+
+      - name: Compress with UPX
+        run: |
+          upx -9 fofatoto.exe -o fofatoto.upx
+          mv fofatoto.upx fofatoto.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fofatoto-windows
+          path: fofatoto.exe
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install nuitka zstandard
+          sudo apt-get update && sudo apt-get install -y upx
+
+      - name: Build Linux executable
+        run: |
+          python -m nuitka --onefile \
+            --lto=yes \
+            --remove-output \
+            --assume-yes-for-downloads \
+            --python-flag=no_docstrings \
+            --noinclude-pytest-mode=nofollow \
+            --noinclude-setuptools-mode=nofollow \
+            --noinclude-unittest-mode=nofollow \
+            --noinclude-pydoc-mode=nofollow \
+            --output-filename=fofatoto \
+            fofatoto.py
+
+      - name: Compress with UPX
+        run: |
+          upx -9 fofatoto -o fofatoto.upx
+          mv fofatoto.upx fofatoto
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fofatoto-linux
+          path: fofatoto
+
+  release:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Rename artifacts
+        run: |
+          mv artifacts/fofatoto-windows/fofatoto.exe artifacts/
+          mv artifacts/fofatoto-linux/fofatoto artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/fofatoto.exe
+            artifacts/fofatoto
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
