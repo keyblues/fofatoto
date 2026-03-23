@@ -15,7 +15,7 @@ FOFA 查询工具，支持单次查询和多次查询模式。
 
 ```json
 {
-    "url": "https://fofa.icu",
+    "url": "https://fofa.info",
     "key": "your-api-key"
 }
 ```

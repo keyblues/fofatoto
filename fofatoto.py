@@ -93,7 +93,7 @@ def ensure_config_exists() -> bool:
         return True
 
     default_config = {
-        "url": "https://fofa.icu",
+        "url": "https://fofa.info",
         "key": "your-fofa-key-here"
     }
 
