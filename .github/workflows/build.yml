@@ -143,23 +143,23 @@ jobs:
 
       - name: Rename
         run: |
-          mv artifacts/fscan-windows-amd64/fscan.exe artifacts/fscan.exe
-          mv artifacts/fscan-windows-arm64/fscan.exe artifacts/fscan_arm64.exe
-          mv artifacts/fscan-linux-amd64/fscan artifacts/fscan
-          mv artifacts/fscan-linux-arm64/fscan artifacts/fscan_arm64
-          mv artifacts/fscan-macos-amd64/fscan artifacts/fscan_mac
-          mv artifacts/fscan-macos-arm64/fscan artifacts/fscan_mac_arm64
+          mv artifacts/fscan-windows-amd64/fscan.exe artifacts/fofatoto.exe
+          mv artifacts/fscan-windows-arm64/fscan.exe artifacts/fofatoto_arm64.exe
+          mv artifacts/fscan-linux-amd64/fscan artifacts/fofatoto
+          mv artifacts/fscan-linux-arm64/fscan artifacts/fofatoto_arm64
+          mv artifacts/fscan-macos-amd64/fscan artifacts/fofatoto_mac
+          mv artifacts/fscan-macos-arm64/fscan artifacts/fofatoto_mac_arm64
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/fscan.exe
-            artifacts/fscan_arm64.exe
-            artifacts/fscan
-            artifacts/fscan_arm64
-            artifacts/fscan_mac
-            artifacts/fscan_mac_arm64
+            artifacts/fofatoto.exe
+            artifacts/fofatoto_arm64.exe
+            artifacts/fofatoto
+            artifacts/fofatoto_arm64
+            artifacts/fofatoto_mac
+            artifacts/fofatoto_mac_arm64
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
