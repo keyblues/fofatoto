@@ -139,10 +139,10 @@ jobs:
         run: |
           cp artifacts/fofatoto-windows-amd64/fofatoto.exe artifacts/fofatoto-windows-amd64.exe
           cp artifacts/fofatoto-windows-arm64/fofatoto.exe artifacts/fofatoto-windows-arm64.exe
-          cp artifacts/fofatoto-linux-amd64/fofatoto artifacts/fofatoto-linux-amd64
-          cp artifacts/fofatoto-linux-arm64/fofatoto artifacts/fofatoto-linux-arm64
-          cp artifacts/fofatoto-macos-amd64/fofatoto artifacts/fofatoto-macos-amd64
-          cp artifacts/fofatoto-macos-arm64/fofatoto artifacts/fofatoto-macos-arm64
+          cp artifacts/fofatoto-linux-amd64/fofatoto artifacts/fofatoto-linux-amd64-bin
+          cp artifacts/fofatoto-linux-arm64/fofatoto artifacts/fofatoto-linux-arm64-bin
+          cp artifacts/fofatoto-macos-amd64/fofatoto artifacts/fofatoto-macos-amd64-bin
+          cp artifacts/fofatoto-macos-arm64/fofatoto artifacts/fofatoto-macos-arm64-bin
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -150,10 +150,10 @@ jobs:
           files: |
             artifacts/fofatoto-windows-amd64.exe
             artifacts/fofatoto-windows-arm64.exe
-            artifacts/fofatoto-linux-amd64
-            artifacts/fofatoto-linux-arm64
-            artifacts/fofatoto-macos-amd64
-            artifacts/fofatoto-macos-arm64
+            artifacts/fofatoto-linux-amd64-bin
+            artifacts/fofatoto-linux-arm64-bin
+            artifacts/fofatoto-macos-amd64-bin
+            artifacts/fofatoto-macos-arm64-bin
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
