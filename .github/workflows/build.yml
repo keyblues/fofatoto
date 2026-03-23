@@ -45,7 +45,7 @@ jobs:
 
       - name: Build
         run: |
-          python -m nuitka --onefile --lto=yes --remove-output \
+          python -m nuitka --onefile --lto=yes --static-libpython=yes --remove-output \
             --assume-yes-for-downloads \
             --python-flag=no_site,no_docstrings \
             --noinclude-pytest-mode=nofollow \
