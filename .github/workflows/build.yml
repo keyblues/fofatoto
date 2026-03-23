@@ -18,7 +18,7 @@ jobs:
         run: pip install nuitka zstandard
       - name: Build Windows executable (amd64)
         run: |
-          python -m nuitka --onefile --onefile-compression=zstd --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto.exe fofatoto.py
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto.exe fofatoto.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -37,7 +37,7 @@ jobs:
         run: pip install nuitka zstandard
       - name: Build Windows executable (arm64)
         run: |
-          python -m nuitka --onefile --onefile-compression=zstd --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto.exe fofatoto.py
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto.exe fofatoto.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -56,7 +56,7 @@ jobs:
         run: pip install nuitka zstandard
       - name: Build Linux executable (amd64)
         run: |
-          python -m nuitka --onefile --onefile-compression=zstd --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -75,7 +75,7 @@ jobs:
         run: pip install nuitka zstandard
       - name: Build Linux executable (arm64)
         run: |
-          python -m nuitka --onefile --onefile-compression=zstd --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -94,7 +94,7 @@ jobs:
         run: pip install nuitka zstandard
       - name: Build macOS executable (amd64)
         run: |
-          python -m nuitka --onefile --onefile-compression=zstd --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -113,7 +113,7 @@ jobs:
         run: pip install nuitka zstandard
       - name: Build macOS executable (arm64)
         run: |
-          python -m nuitka --onefile --onefile-compression=zstd --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
