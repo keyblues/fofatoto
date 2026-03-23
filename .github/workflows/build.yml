@@ -41,9 +41,6 @@ jobs:
       - name: Build
         run: python3 -m nuitka --onefile --lto=yes --static-libpython=yes --remove-output --assume-yes-for-downloads --python-flag=no_site,no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --noinclude-IPython-mode=nofollow --noinclude-dask-mode=nofollow --noinclude-numba-mode=nofollow --noinclude-default-mode=nofollow --output-dir=dist --output-filename=fofatoto fofatoto.py
 
-      - name: Strip binary
-        run: strip dist/fofatoto
-
       - uses: actions/upload-artifact@v4
         with:
           name: fofatoto-${{ matrix.platform }}
