@@ -9,7 +9,6 @@ FOFA 查询工具，支持单次查询和多次查询模式。
 | 平台 | 架构 | 文件名 |
 |------|------|--------|
 | Windows | amd64 | fofatoto.exe |
-| Windows | arm64 | fofatoto_arm64.exe |
 | Linux | amd64 | fofatoto |
 | Linux | arm64 | fofatoto_arm64 |
 | macOS | amd64 | fofatoto_mac |

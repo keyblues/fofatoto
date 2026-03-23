@@ -13,23 +13,23 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            name: windows-amd64
+            platform: windows_amd64
             artifact: fofatoto.exe
             static-libpython: ""
           - os: ubuntu-latest
-            name: linux-amd64
+            platform: linux_amd64
             artifact: fofatoto
             static-libpython: "--static-libpython=yes"
           - os: ubuntu-latest
-            name: linux-arm64
+            platform: linux_arm64
             artifact: fofatoto
             static-libpython: "--static-libpython=yes"
           - os: macos-latest
-            name: macos-amd64
+            platform: macos_amd64
             artifact: fofatoto
             static-libpython: "--static-libpython=yes"
           - os: macos-14
-            name: macos-arm64
+            platform: macos_arm64
             artifact: fofatoto
             static-libpython: "--static-libpython=yes"
 
@@ -49,12 +49,12 @@ jobs:
         run: pip install nuitka zstandard
 
       - name: Build
-        run: python -m nuitka --onefile --lto=yes ${{ matrix.static-libpython }} --remove-output --assume-yes-for-downloads --python-flag=no_site,no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --noinclude-IPython-mode=nofollow --noinclude-dask-mode=nofollow --noinclude-numba-mode=nofollow --noinclude-default-mode=nofollow --output-filename=${{ matrix.artifact }} fofatoto.py
+        run: python -m nuitka --onefile --lto=yes ${{ matrix.static-libpython }} --remove-output --assume-yes-for-downloads --python-flag=no_site,no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --noinclude-IPython-mode=nofollow --noinclude-dask-mode=nofollow --noinclude-numba-mode=nofollow --noinclude-default-mode=nofollow --output-dir=dist --output-filename=${{ matrix.artifact }} fofatoto.py
 
       - uses: actions/upload-artifact@v4
         with:
-          name: fofatoto-${{ matrix.name }}
-          path: ${{ matrix.artifact }}
+          name: fofatoto-${{ matrix.platform }}
+          path: dist/${{ matrix.artifact }}
 
   release:
     needs: [build]
@@ -75,24 +75,28 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          merge-multiple: true
 
       - name: Prepare artifacts
         run: |
           cd artifacts
-          mv fofatoto fofatoto_linux_amd64 2>/dev/null || true
-          mv fofatoto-1 fofatoto_linux_arm64 2>/dev/null || true
-          mv fofatoto-2 fofatoto_macos_amd64 2>/dev/null || true
-          mv fofatoto-3 fofatoto_macos_arm64 2>/dev/null || true
-          for f in fofatoto*.exe; do
-            [ -f "$f" ] && mv "$f" "${f%.exe}_windows_amd64.exe"
-          done
+          mv fofatoto-windows_amd64/fofatoto.exe ../fofatoto.exe
+          mv fofatoto-linux_amd64/fofatoto ../fofatoto
+          mv fofatoto-linux_arm64/fofatoto ../fofatoto_arm64
+          mv fofatoto-macos_amd64/fofatoto ../fofatoto_mac
+          mv fofatoto-macos_arm64/fofatoto ../fofatoto_mac_arm64
+          cd ..
+          rm -rf artifacts
           ls -la
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/*
+          files: |
+            fofatoto.exe
+            fofatoto
+            fofatoto_arm64
+            fofatoto_mac
+            fofatoto_mac_arm64
           body: |
             ## fofatoto v1.0.0
 
@@ -102,11 +106,11 @@ jobs:
 
             | 平台 | 架构 | 文件名 |
             |------|------|--------|
-            | Windows | amd64 | fofatoto_windows_amd64.exe |
-            | Linux | amd64 | fofatoto_linux_amd64 |
-            | Linux | arm64 | fofatoto_linux_arm64 |
-            | macOS | amd64 | fofatoto_macos_amd64 |
-            | macOS | arm64 (M芯片) | fofatoto_macos_arm64 |
+            | Windows | amd64 | fofatoto.exe |
+            | Linux | amd64 | fofatoto |
+            | Linux | arm64 | fofatoto_arm64 |
+            | macOS | amd64 | fofatoto_mac |
+            | macOS | arm64 (M芯片) | fofatoto_mac_arm64 |
 
             ### 使用方法
 
