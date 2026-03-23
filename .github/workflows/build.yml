@@ -74,8 +74,41 @@ jobs:
           name: fofatoto-linux
           path: fofatoto
 
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install nuitka zstandard
+
+      - name: Build macOS executable
+        run: |
+          python -m nuitka --onefile \
+            --lto=yes \
+            --remove-output \
+            --assume-yes-for-downloads \
+            --python-flag=no_docstrings \
+            --noinclude-pytest-mode=nofollow \
+            --noinclude-setuptools-mode=nofollow \
+            --noinclude-unittest-mode=nofollow \
+            --noinclude-pydoc-mode=nofollow \
+            --output-filename=fofatoto \
+            fofatoto.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fofatoto-macos
+          path: fofatoto
+
   release:
-    needs: [build-windows, build-linux]
+    needs: [build-windows, build-linux, build-macos]
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     permissions:
@@ -97,14 +130,16 @@ jobs:
       - name: Rename artifacts
         run: |
           mv artifacts/fofatoto-windows/fofatoto.exe artifacts/
-          mv artifacts/fofatoto-linux/fofatoto artifacts/
+          mv artifacts/fofatoto-linux/fofatoto artifacts/fofatoto-linux
+          mv artifacts/fofatoto-macos/fofatoto artifacts/fofatoto-macos
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
             artifacts/fofatoto.exe
-            artifacts/fofatoto
+            artifacts/fofatoto-linux
+            artifacts/fofatoto-macos
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
