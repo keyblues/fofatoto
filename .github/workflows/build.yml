@@ -15,18 +15,23 @@ jobs:
           - os: windows-latest
             name: windows-amd64
             artifact: fofatoto.exe
+            static-libpython: ""
           - os: ubuntu-latest
             name: linux-amd64
             artifact: fofatoto
+            static-libpython: "--static-libpython=yes"
           - os: ubuntu-latest
             name: linux-arm64
             artifact: fofatoto
+            static-libpython: "--static-libpython=yes"
           - os: macos-latest
             name: macos-amd64
             artifact: fofatoto
+            static-libpython: "--static-libpython=yes"
           - os: macos-14
             name: macos-arm64
             artifact: fofatoto
+            static-libpython: "--static-libpython=yes"
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -44,7 +49,7 @@ jobs:
         run: pip install nuitka zstandard
 
       - name: Build
-        run: python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_site,no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --noinclude-IPython-mode=nofollow --noinclude-dask-mode=nofollow --noinclude-numba-mode=nofollow --noinclude-default-mode=nofollow --output-filename=${{ matrix.artifact }} fofatoto.py
+        run: python -m nuitka --onefile --lto=yes ${{ matrix.static-libpython }} --remove-output --assume-yes-for-downloads --python-flag=no_site,no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --noinclude-IPython-mode=nofollow --noinclude-dask-mode=nofollow --noinclude-numba-mode=nofollow --noinclude-default-mode=nofollow --output-filename=${{ matrix.artifact }} fofatoto.py
 
       - uses: actions/upload-artifact@v4
         with:
