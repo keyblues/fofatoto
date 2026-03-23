@@ -1,20 +1,6 @@
 #!/usr/bin/env python3
 """
 FOFA 查询工具 - 单文件工具
-
-用法:
-    python fofatoto.py "protocol=http"                    # 基本查询
-    python fofatoto.py "domain=baidu.com" -o results      # 指定输出文件名
-    python fofatoto.py "ip=1.1.1.1/24" --json             # 输出 JSON 格式
-    python fofatoto.py "port=80,443" -l 50000             # 指定返回 50000 条
-    python fofatoto.py "domain=baidu.com" -l max          # 导出所有匹配数据
-    python fofatoto.py "domain=baidu.com" -f "ip,port"    # 指定查询字段
-    python fofatoto.py "domain=baidu.com" -l max --full   # 导出超过一年的全部数据
-
-多次查询模式说明:
-    当 -l 参数 > 10000 或为 max 时，自动使用 after 时间范围查询
-    该模式每次获取 10000 条，自动根据 lastupdatetime 继续获取下一批
-    数据会自动去重，确保唯一性
 """
 
 import argparse
@@ -24,6 +10,7 @@ import sys
 import base64
 import time
 import urllib.request
+from datetime import datetime, timedelta
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import Optional
@@ -287,7 +274,7 @@ class FofaClient:
         query: str,
         max_size: int = 0,
         fields: Optional[str] = None,
-        fill_percent: float = 0.9,
+        fill_percent: float = 0.8,
         api_rate_limit: float = 5.0,
         full: bool = False,
     ) -> SearchStats:
@@ -304,7 +291,7 @@ class FofaClient:
             query: FOFA 查询语句
             max_size: 最大返回数量（0 表示不限制）
             fields: 返回字段
-            fill_percent: 完成百分比（0.0-1.0），默认 0.9
+            fill_percent: 完成百分比（0.0-1.0），默认 0.8
             api_rate_limit: API 频率限制（秒），默认 5 秒
             full: 是否搜索全部数据
 
@@ -396,7 +383,6 @@ class FofaClient:
                 break
 
             if batch_min_time:
-                from datetime import datetime, timedelta
                 try:
                     dt = datetime.strptime(batch_min_time, "%Y-%m-%d %H:%M:%S")
                     dt -= timedelta(seconds=1)
@@ -460,7 +446,11 @@ def export_json(results: list[FofaResult], output_path: Path, fields: Optional[s
 
     results = dedup_results(results, fields, dedup_field)
 
-    data = [r.to_dict() for r in results]
+    data = []
+    for r in results:
+        d = r.to_dict()
+        d = {k: v for k, v in d.items() if v != "" and v is not None}
+        data.append(d)
     output_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return len(results)
 
@@ -567,17 +557,16 @@ def build_parser():
         usage="%(prog)s 查询语句 [选项]",
         epilog="""
 示例:
-  %(prog)s "protocol=http"                           # 基本查询
-  %(prog)s "domain=baidu.com" -o results           # 指定输出文件名
-  %(prog)s "domain=baidu.com" -l max              # 导出全部匹配数据
-  %(prog)s "ip=1.1.1.1/24" -json                  # 输出 JSON 格式
+  %(prog)s "domain=baidu.com" -o results.csv      # 指定 CSV 输出文件
+  %(prog)s "domain=baidu.com" -l max -o all.csv   # 导出全部匹配数据
+  %(prog)s "ip=1.1.1.1/24" -json -o ips.json      # 输出 JSON 格式
   %(prog)s "domain=baidu.com" -f "ip,port"        # 指定查询字段
         """,
     )
     parser.add_argument("query", nargs="?", help="FOFA 查询语句，如: domain=baidu.com")
-    parser.add_argument("-o", "--output", help="输出文件名（不含后缀），默认 fofa_results", default="fofa_results")
+    parser.add_argument("-o", "--output", help="输出文件名（含后缀），如 results.csv")
     parser.add_argument("-l", "--limit", help="最大返回数量，支持 >10000 或 'max'（导出全部）", default="100")
-    parser.add_argument("--fill", type=float, default=0.9, help="多次查询完成百分比（0.0-1.0），默认 0.9")
+    parser.add_argument("--fill", type=float, default=0.8, help="多次查询完成百分比（0.0-1.0），仅 -l>10000 或 max 时生效")
     parser.add_argument("-csv", action="store_true", help="导出 CSV 格式")
     parser.add_argument("-txt", action="store_true", help="导出 TXT 格式（URL 列表）")
     parser.add_argument("-json", action="store_true", help="导出 JSON 格式")
@@ -638,7 +627,19 @@ def main():
     if not any([args.csv, args.txt, args.json]):
         args.csv = True
 
+    # 没有指定输出文件名时自动生成
+    if not args.output:
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if args.json:
+            args.output = f"fofa_results_{timestamp}.json"
+        elif args.txt:
+            args.output = f"fofa_results_{timestamp}.txt"
+        else:
+            args.output = f"fofa_results_{timestamp}.csv"
+
     # 执行查询
+    results = None
     try:
         limit_str = str(args.limit)
         is_max = limit_str.lower() == "max"
@@ -680,40 +681,48 @@ def main():
             print("[-] 没有找到结果")
             sys.exit(0)
 
-        # 导出文件
-        output_path = Path(args.output)
-        exported = 0
-
-        if args.csv:
-            csv_path = unique_path(output_path.with_suffix(".csv"))
-            count = export_csv(results, csv_path, fields=args.fields, dedup_field=args.dedup)
-            print(f"[+] 已导出 CSV: {csv_path} ({count} 条)")
-            exported += 1
-
-        if args.txt:
-            txt_path = unique_path(output_path.with_suffix(".txt"))
-            count = export_txt(results, txt_path, fields=args.fields, dedup_field=args.dedup)
-            print(f"[+] 已导出 TXT: {txt_path} ({count} 条)")
-            exported += 1
-
-        if args.json:
-            json_path = unique_path(output_path.with_suffix(".json"))
-            count = export_json(results, json_path, fields=args.fields, dedup_field=args.dedup)
-            print(f"[+] 已导出 JSON: {json_path} ({count} 条)")
-            exported += 1
-
-        if exported == 0:
-            print("[-] 没有导出任何文件（请指定输出格式）")
+        export_results(results, args)
 
     except FofaAPIError as e:
         print(f"[-] API 错误: {e}", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
-        print("\n[-] 已取消")
+        if results:
+            print("\n[*] 正在保存已获取的数据...")
+            export_results(results, args)
+        else:
+            print("\n[-] 已取消")
         sys.exit(1)
     except Exception as e:
         print(f"[-] 错误: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def export_results(results, args):
+    """导出结果"""
+    output_path = Path(args.output)
+    exported = 0
+
+    if args.csv:
+        csv_path = unique_path(output_path)
+        count = export_csv(results, csv_path, fields=args.fields, dedup_field=args.dedup)
+        print(f"[+] 已导出 CSV: {csv_path} ({count} 条)")
+        exported += 1
+
+    if args.txt:
+        txt_path = unique_path(output_path)
+        count = export_txt(results, txt_path, fields=args.fields, dedup_field=args.dedup)
+        print(f"[+] 已导出 TXT: {txt_path} ({count} 条)")
+        exported += 1
+
+    if args.json:
+        json_path = unique_path(output_path)
+        count = export_json(results, json_path, fields=args.fields, dedup_field=args.dedup)
+        print(f"[+] 已导出 JSON: {json_path} ({count} 条)")
+        exported += 1
+
+    if exported == 0:
+        print("[-] 没有导出任何文件（请指定输出格式）")
 
 
 if __name__ == "__main__":

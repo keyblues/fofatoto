@@ -1,2 +1,100 @@
 # fofatoto
-fofatoto 是一款fofa工具
+
+FOFA 查询工具，支持单次查询和多次查询模式。
+
+## 安装
+
+```bash
+pip install -r requirements.txt
+```
+
+或直接运行：
+
+```bash
+python3 fofatoto.py
+```
+
+## 配置
+
+首次运行时会自动创建 `config.json`，填入你的 FOFA API 地址和密钥：
+
+```json
+{
+    "url": "https://fofa.icu",
+    "key": "your-api-key"
+}
+```
+
+## 使用方法
+
+```bash
+fofatoto.py 查询语句 [选项]
+```
+
+### 选项
+
+| 选项 | 说明 |
+|------|------|
+| `-o, --output` | 输出文件名（含后缀），如 results.csv |
+| `-l, --limit` | 最大返回数量，支持 >10000 或 max（导出全部） |
+| `--fill` | 多次查询完成百分比（0.0-1.0），仅 -l>10000 或 max 时生效 |
+| `-csv` | 导出 CSV 格式 |
+| `-txt` | 导出 TXT 格式（URL/IP/Domain 列表） |
+| `-json` | 导出 JSON 格式 |
+| `-f, --fields` | 查询字段，控制 FOFA API 返回哪些字段，默认 host,ip,port,protocol |
+| `--dedup` | 根据指定字段去重，多个字段用逗号分隔 |
+| `--full` | 搜索全部数据（不止一年） |
+| `-v, --verbose` | 显示详细信息 |
+
+### 示例
+
+```bash
+# 基本查询
+fofatoto.py "domain=baidu.com"
+
+# 指定输出文件
+fofatoto.py "domain=baidu.com" -o results.csv
+
+# 导出全部匹配数据
+fofatoto.py "domain=baidu.com" -l max -o all.csv
+
+# 输出 JSON 格式
+fofatoto.py "ip=1.1.1.1/24" -json -o ips.json
+
+# 指定查询字段
+fofatoto.py "domain=baidu.com" -f "ip,port"
+
+# 根据 IP 去重
+fofatoto.py "domain=baidu.com" --dedup ip
+
+# 根据多个字段组合去重
+fofatoto.py "domain=baidu.com" --dedup ip,host
+
+# 搜索超过一年的全部数据
+fofatoto.py "domain=baidu.com" -l max --full -o all.csv
+```
+
+## 多次查询模式
+
+当 `-l` 参数大于 10000 或为 `max` 时，自动启用多次查询模式：
+
+- 每次从 FOFA API 获取最多 10000 条数据
+- 通过 `lastupdatetime` 字段递进获取下一批数据
+- 默认完成 80% 的数据，可通过 `--fill` 调整
+
+## TXT 导出格式
+
+TXT 导出根据查询字段自动判断输出格式：
+
+| 查询字段 | 输出格式 |
+|----------|----------|
+| `-f ip` | IP 列表 |
+| `-f domain` | Domain 列表 |
+| 其他 | URL 列表 |
+
+## 去重说明
+
+- 默认根据所有导出字段组合去重
+- 可通过 `--dedup` 指定单一字段去重
+- 可通过 `--dedup ip,host` 指定多字段组合去重
+- 去重字段会自动添加到查询请求中
