@@ -11,7 +11,7 @@ FOFA 查询工具 - 单文件工具
     python fofatoto.py "domain=baidu.com" -f "ip,port"    # 指定查询字段
     python fofatoto.py "domain=baidu.com" -l max --full   # 导出超过一年的全部数据
 
-高效模式说明:
+多次查询模式说明:
     当 -l 参数 > 10000 或为 max 时，自动使用 after 时间范围查询
     该模式每次获取 10000 条，自动根据 lastupdatetime 继续获取下一批
     数据会自动去重，确保唯一性
@@ -20,14 +20,14 @@ FOFA 查询工具 - 单文件工具
 import argparse
 import json
 import csv
-import os
 import sys
 import base64
 import time
 import urllib.request
 from pathlib import Path
 from dataclasses import dataclass, asdict
-from typing import Optional, Callable
+from typing import Optional
+from urllib.parse import urlparse
 
 
 # ============ Banner ============
@@ -189,19 +189,6 @@ class FofaClient:
     def __init__(self, url: str, key: str):
         self.base_url = url.rstrip("/")
         self.key = key
-        self._validate_credential()
-
-    def _validate_credential(self) -> None:
-        """验证凭证有效性"""
-        query = base64.b64encode(b"test").decode()
-        api_url = f"{self.base_url}/api/v1/search/all?key={self.key}&qbase64={query}&size=1"
-        try:
-            resp = urllib.request.urlopen(api_url, timeout=10)
-            data = json.loads(resp.read().decode())
-            if data.get("error"):
-                raise FofaAPIError(f"API 凭证验证失败: {data.get('errmsg', '未知错误')}")
-        except Exception as e:
-            raise FofaAPIError(f"API 凭证验证失败: {e}")
 
     def get_usage(self) -> dict:
         """
@@ -267,6 +254,8 @@ class FofaClient:
         known_fields = {"host", "ip", "port", "protocol", "domain", "title", "server", "country", "city", "lastupdatetime", "asn", "org", "os", "icp", "jarm", "header", "banner", "cert", "product", "product_category", "version", "cname", "latitude", "longitude", "region", "country_name", "base_protocol", "link"}
         unique_ips = set()
         for item in data.get("results", []):
+            if isinstance(item, str):
+                item = [item]
             result = FofaResult()
             result._extra = {}
             for i, field in enumerate(fields_list):
@@ -275,6 +264,17 @@ class FofaClient:
                     setattr(result, field, value)
                 else:
                     result._extra[field] = value
+            if "domain" in fields_list and result.host:
+                if result.host.startswith("http"):
+                    parsed = urlparse(result.host)
+                    netloc = parsed.netloc
+                    if ":" in netloc:
+                        netloc = netloc.split(":")[0]
+                    result.domain = netloc
+                elif result.host.replace(".", "").replace(":", "").isdigit():
+                    result.domain = ""
+                else:
+                    result.domain = result.host
             results.append(result)
             if result.ip:
                 unique_ips.add(result.ip)
@@ -292,7 +292,7 @@ class FofaClient:
         full: bool = False,
     ) -> SearchStats:
         """
-        高效查询所有结果：使用 before 递进策略
+        多次查询所有结果：使用 before 递进策略
 
         策略：
         1. 用 before 从最新时间往前查，每次最多 10000 条
@@ -365,7 +365,7 @@ class FofaClient:
                 range_query = query
 
             slice_stats = self.search(range_query, size=10000, page=1, fields=fields, full=full)
-            api_used += len(slice_stats.results)
+            api_used += 1
 
             if not slice_stats.results:
                 break
@@ -403,7 +403,7 @@ class FofaClient:
                     before_time = dt.strftime("%Y-%m-%d %H:%M:%S")
                 except ValueError:
                     before_time = None
-                except:
+                except Exception:
                     before_time = batch_min_time
             else:
                 before_time = None
@@ -419,10 +419,12 @@ class FofaClient:
 
 # ============ 导出相关 ============
 
-def export_csv(results: list[FofaResult], output_path: Path, fields: Optional[str] = None) -> int:
+def export_csv(results: list[FofaResult], output_path: Path, fields: Optional[str] = None, dedup_field: Optional[str] = None) -> int:
     """导出为 CSV 文件"""
     if not results:
         return 0
+
+    results = dedup_results(results, fields, dedup_field)
 
     base_fields = ["host", "ip", "port", "protocol", "domain", "title", "server", "country", "city",
                   "lastupdatetime", "asn", "org", "os", "icp", "jarm", "header", "banner", "cert",
@@ -451,6 +453,18 @@ def export_csv(results: list[FofaResult], output_path: Path, fields: Optional[st
     return len(results)
 
 
+def export_json(results: list[FofaResult], output_path: Path, fields: Optional[str] = None, dedup_field: Optional[str] = None) -> int:
+    """导出为 JSON 文件"""
+    if not results:
+        return 0
+
+    results = dedup_results(results, fields, dedup_field)
+
+    data = [r.to_dict() for r in results]
+    output_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return len(results)
+
+
 def unique_path(path: Path) -> Path:
     """如果文件存在，自动重命名"""
     if not path.exists():
@@ -466,42 +480,82 @@ def unique_path(path: Path) -> Path:
         n += 1
 
 
-def export_txt(results: list[FofaResult], output_path: Path) -> int:
-    """导出为 TXT 文件（URL 列表）"""
+def dedup_results(results: list[FofaResult], fields: Optional[str], dedup_field: Optional[str] = None) -> list[FofaResult]:
+    """去重"""
+    user_fields = set(f.strip() for f in (fields or "").split(",") if f.strip())
+
+    if dedup_field:
+        dedup_fields = set(f.strip() for f in dedup_field.split(",") if f.strip())
+    else:
+        dedup_fields = user_fields
+
+    seen = set()
+    unique_results = []
+    for r in results:
+        key_tuple = []
+        for f in dedup_fields:
+            if hasattr(r, f):
+                key_tuple.append(getattr(r, f, "") or "")
+            elif f == "host":
+                key_tuple.append(r.host or "")
+            elif f == "ip":
+                key_tuple.append(r.ip or "")
+            elif f == "port":
+                key_tuple.append(r.port or "")
+            elif f == "domain":
+                key_tuple.append(r.domain or "")
+            elif f == "protocol":
+                key_tuple.append(r.protocol or "")
+        key = tuple(key_tuple)
+        if any(key_tuple) and key not in seen:
+            seen.add(key)
+            unique_results.append(r)
+    return unique_results
+
+
+def export_txt(results: list[FofaResult], output_path: Path, fields: Optional[str] = None, dedup_field: Optional[str] = None) -> int:
+    """导出为 TXT 文件（URL/IP/Domain 列表）"""
     if not results:
         return 0
+
+    results = dedup_results(results, fields, dedup_field)
+
+    user_fields = set(f.strip() for f in (fields or "").split(",") if f.strip())
+
+    if user_fields == {"ip"}:
+        output_type = "ip"
+    elif user_fields == {"domain"}:
+        output_type = "domain"
+    else:
+        output_type = "url"
 
     count = 0
     with output_path.open("w", encoding="utf-8", newline="\n") as f:
         for r in results:
-            if r.host:
-                if r.host.startswith("http"):
-                    url = r.host
-                else:
-                    protocol = r.protocol or "http"
-                    if r.port and r.port not in ("80", "443"):
-                        url = f"{protocol}://{r.host}:{r.port}"
+            if output_type == "ip":
+                if r.ip:
+                    f.write(f"{r.ip}\n")
+                    count += 1
+            elif output_type == "domain":
+                if r.domain:
+                    f.write(f"{r.domain}\n")
+                    count += 1
+            else:
+                if r.host:
+                    if r.host.startswith("http"):
+                        f.write(f"{r.host}\n")
                     else:
-                        url = f"{protocol}://{r.host}"
-                f.write(f"{url}\n")
-                count += 1
-            elif r.ip:
-                protocol = r.protocol or "http"
-                if r.port and r.port not in ("80", "443"):
-                    url = f"{protocol}://{r.ip}:{r.port}"
-                else:
-                    url = f"{protocol}://{r.ip}"
-                f.write(f"{url}\n")
-                count += 1
+                        protocol = r.protocol or "http"
+                        if r.port and r.port not in ("80", "443"):
+                            f.write(f"{protocol}://{r.host}:{r.port}\n")
+                        else:
+                            f.write(f"{protocol}://{r.host}\n")
+                    count += 1
+                elif r.ip:
+                    f.write(f"{r.ip}\n")
+                    count += 1
 
     return count
-
-
-def export_json(results: list[FofaResult], output_path: Path) -> int:
-    """导出为 JSON 文件"""
-    data = [r.to_dict() for r in results]
-    output_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return len(results)
 
 
 # ============ 主函数 ============
@@ -510,16 +564,25 @@ def build_parser():
     parser = argparse.ArgumentParser(
         description="FOFA 查询工具",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
+        usage="%(prog)s 查询语句 [选项]",
+        epilog="""
+示例:
+  %(prog)s "protocol=http"                           # 基本查询
+  %(prog)s "domain=baidu.com" -o results           # 指定输出文件名
+  %(prog)s "domain=baidu.com" -l max              # 导出全部匹配数据
+  %(prog)s "ip=1.1.1.1/24" -json                  # 输出 JSON 格式
+  %(prog)s "domain=baidu.com" -f "ip,port"        # 指定查询字段
+        """,
     )
     parser.add_argument("query", nargs="?", help="FOFA 查询语句，如: domain=baidu.com")
-    parser.add_argument("-o", "--output", help="输出文件名（不含后缀），默认为 fofa_results", default="fofa_results")
-    parser.add_argument("-l", "--limit", help="最大返回数量，支持 >10000 的数值或 'max'（导出所有匹配数据）", default="100")
-    parser.add_argument("--fill", type=float, default=0.9, help="高效模式完成百分比（0.0-1.0），默认 0.9（90%%），设为 1.0 则查完所有数据")
+    parser.add_argument("-o", "--output", help="输出文件名（不含后缀），默认 fofa_results", default="fofa_results")
+    parser.add_argument("-l", "--limit", help="最大返回数量，支持 >10000 或 'max'（导出全部）", default="100")
+    parser.add_argument("--fill", type=float, default=0.9, help="多次查询完成百分比（0.0-1.0），默认 0.9")
     parser.add_argument("-csv", action="store_true", help="导出 CSV 格式")
     parser.add_argument("-txt", action="store_true", help="导出 TXT 格式（URL 列表）")
     parser.add_argument("-json", action="store_true", help="导出 JSON 格式")
-    parser.add_argument("-f", "--fields", help="指定查询字段，默认为 host,ip,port,protocol,domain,title,server,country,city", default="host,ip,port,protocol,domain,title,server,country,city")
+    parser.add_argument("-f", "--fields", help="查询字段，控制 FOFA API 返回哪些字段及导出字段，默认 host,ip,port,protocol", default="host,ip,port,protocol")
+    parser.add_argument("--dedup", help="根据指定字段去重，多个字段用逗号分隔，如 --dedup ip 或 --dedup ip,host")
     parser.add_argument("--full", action="store_true", help="搜索全部数据（不止一年）")
     parser.add_argument("-v", "--verbose", action="store_true", help="显示详细信息")
     return parser
@@ -566,14 +629,14 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
-    # 如果没有指定格式，默认全部导出
-    if not any([args.csv, args.txt, args.json]):
-        args.csv = True
-
     # 没有查询语句时显示 usage
     if not args.query:
         sys.stderr.write(parser.format_usage())
         sys.exit(1)
+
+    # 没有指定格式时，默认导出 CSV
+    if not any([args.csv, args.txt, args.json]):
+        args.csv = True
 
     # 执行查询
     try:
@@ -585,6 +648,14 @@ def main():
             print(f"[*] 查询: {args.query}")
             print(f"[*] 数量限制: {'无限制(max)' if is_max else limit_value}")
 
+        query_fields = args.fields
+        if args.dedup:
+            dedup_fields = set(f.strip() for f in args.dedup.split(",") if f.strip())
+            user_fields = set(f.strip() for f in (args.fields or "").split(",") if f.strip())
+            extra_fields = dedup_fields - user_fields
+            if extra_fields:
+                query_fields = args.fields + "," + ",".join(extra_fields)
+
         if limit_value > 10000 or is_max:
             max_size = 0 if is_max else limit_value
             if args.full:
@@ -594,12 +665,12 @@ def main():
             stats = client.search_all_efficient(
                 args.query,
                 max_size=max_size,
-                fields=args.fields,
+                fields=query_fields,
                 fill_percent=args.fill,
                 full=args.full,
             )
         else:
-            stats = client.search(args.query, size=limit_value, fields=args.fields, full=args.full)
+            stats = client.search(args.query, size=limit_value, fields=query_fields, full=args.full)
 
         results = stats.results
 
@@ -615,19 +686,19 @@ def main():
 
         if args.csv:
             csv_path = unique_path(output_path.with_suffix(".csv"))
-            count = export_csv(results, csv_path, fields=args.fields)
+            count = export_csv(results, csv_path, fields=args.fields, dedup_field=args.dedup)
             print(f"[+] 已导出 CSV: {csv_path} ({count} 条)")
             exported += 1
 
         if args.txt:
             txt_path = unique_path(output_path.with_suffix(".txt"))
-            count = export_txt(results, txt_path)
+            count = export_txt(results, txt_path, fields=args.fields, dedup_field=args.dedup)
             print(f"[+] 已导出 TXT: {txt_path} ({count} 条)")
             exported += 1
 
         if args.json:
             json_path = unique_path(output_path.with_suffix(".json"))
-            count = export_json(results, json_path)
+            count = export_json(results, json_path, fields=args.fields, dedup_field=args.dedup)
             print(f"[+] 已导出 JSON: {json_path} ({count} 条)")
             exported += 1
 
