@@ -2,6 +2,13 @@
 
 FOFA 查询工具，支持单次查询和多次查询模式。
 
+## 下载
+
+从 [Releases](https://github.com/keyblues/fofatoto/releases) 下载编译好的二进制文件：
+
+- `fofatoto` - Linux x86_64 (6.2MB)
+- `fofatoto.exe` - Windows x64
+
 ## 配置
 
 首次运行时会自动创建 `config.json`，填入你的 FOFA API 地址和密钥：
@@ -16,7 +23,7 @@ FOFA 查询工具，支持单次查询和多次查询模式。
 ## 使用方法
 
 ```bash
-fofatoto.py 查询语句 [选项]
+fofatoto "查询语句" [选项]
 ```
 
 ### 选项
@@ -38,28 +45,28 @@ fofatoto.py 查询语句 [选项]
 
 ```bash
 # 基本查询
-fofatoto.py "domain=baidu.com"
+fofatoto "domain=baidu.com"
 
 # 指定输出文件
-fofatoto.py "domain=baidu.com" -o results.csv
+fofatoto "domain=baidu.com" -o results.csv
 
 # 导出全部匹配数据
-fofatoto.py "domain=baidu.com" -l max -o all.csv
+fofatoto "domain=baidu.com" -l max -o all.csv
 
 # 输出 JSON 格式
-fofatoto.py "ip=1.1.1.1/24" -json -o ips.json
+fofatoto "ip=1.1.1.1/24" -json -o ips.json
 
 # 指定查询字段
-fofatoto.py "domain=baidu.com" -f "ip,port"
+fofatoto "domain=baidu.com" -f "ip,port"
 
 # 根据 IP 去重
-fofatoto.py "domain=baidu.com" --dedup ip
+fofatoto "domain=baidu.com" --dedup ip
 
 # 根据多个字段组合去重
-fofatoto.py "domain=baidu.com" --dedup ip,host
+fofatoto "domain=baidu.com" --dedup ip,host
 
 # 搜索超过一年的全部数据
-fofatoto.py "domain=baidu.com" -l max --full -o all.csv
+fofatoto "domain=baidu.com" -l max --full -o all.csv
 ```
 
 ## 多次查询模式
@@ -86,3 +93,22 @@ TXT 导出根据查询字段自动判断输出格式：
 - 可通过 `--dedup` 指定单一字段去重
 - 可通过 `--dedup ip,host` 指定多字段组合去重
 - 去重字段会自动添加到查询请求中
+
+## 构建
+
+```bash
+pip install nuitka zstandard
+apt install python3-dev patchelf upx
+
+python -m nuitka --onefile \
+  --lto=yes --remove-output --assume-yes-for-downloads \
+  --python-flag=no_docstrings \
+  --noinclude-pytest-mode=nofollow \
+  --noinclude-setuptools-mode=nofollow \
+  --noinclude-unittest-mode=nofollow \
+  --noinclude-pydoc-mode=nofollow \
+  --output-filename=fofatoto \
+  fofatoto.py
+
+upx -9 fofatoto -o fofatoto.upx && mv fofatoto.upx fofatoto
+```
