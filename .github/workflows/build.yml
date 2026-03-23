@@ -18,13 +18,13 @@ jobs:
         run: pip install nuitka zstandard
       - name: Build Windows executable (amd64)
         run: |
-          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --windows-disable-console --output-filename=fscan.exe fofatoto.py
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto.exe fofatoto.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fscan-windows-amd64
-          path: fscan.exe
+          name: fofatoto-windows-amd64
+          path: fofatoto.exe
 
   build-windows-arm64:
     runs-on: windows-latest
@@ -37,13 +37,13 @@ jobs:
         run: pip install nuitka zstandard
       - name: Build Windows executable (arm64)
         run: |
-          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --windows-disable-console --output-filename=fscan.exe fofatoto.py
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto.exe fofatoto.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fscan-windows-arm64
-          path: fscan.exe
+          name: fofatoto-windows-arm64
+          path: fofatoto.exe
 
   build-linux-amd64:
     runs-on: ubuntu-latest
@@ -56,13 +56,13 @@ jobs:
         run: pip install nuitka zstandard
       - name: Build Linux executable (amd64)
         run: |
-          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fscan fofatoto.py
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fscan-linux-amd64
-          path: fscan
+          name: fofatoto-linux-amd64
+          path: fofatoto
 
   build-linux-arm64:
     runs-on: ubuntu-latest
@@ -75,13 +75,13 @@ jobs:
         run: pip install nuitka zstandard
       - name: Build Linux executable (arm64)
         run: |
-          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fscan fofatoto.py
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fscan-linux-arm64
-          path: fscan
+          name: fofatoto-linux-arm64
+          path: fofatoto
 
   build-macos-amd64:
     runs-on: macos-latest
@@ -94,13 +94,13 @@ jobs:
         run: pip install nuitka zstandard
       - name: Build macOS executable (amd64)
         run: |
-          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fscan fofatoto.py
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fscan-macos-amd64
-          path: fscan
+          name: fofatoto-macos-amd64
+          path: fofatoto
 
   build-macos-arm64:
     runs-on: macos-14
@@ -113,13 +113,13 @@ jobs:
         run: pip install nuitka zstandard
       - name: Build macOS executable (arm64)
         run: |
-          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fscan fofatoto.py
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fscan-macos-arm64
-          path: fscan
+          name: fofatoto-macos-arm64
+          path: fofatoto
 
   release:
     needs: [build-windows-amd64, build-windows-arm64, build-linux-amd64, build-linux-arm64, build-macos-amd64, build-macos-arm64]
@@ -143,46 +143,44 @@ jobs:
 
       - name: Rename
         run: |
-          mv artifacts/fscan-windows-amd64/fscan.exe artifacts/fofatoto.exe
-          mv artifacts/fscan-windows-arm64/fscan.exe artifacts/fofatoto_arm64.exe
-          mv artifacts/fscan-linux-amd64/fscan artifacts/fofatoto
-          mv artifacts/fscan-linux-arm64/fscan artifacts/fofatoto_arm64
-          mv artifacts/fscan-macos-amd64/fscan artifacts/fofatoto_mac
-          mv artifacts/fscan-macos-arm64/fscan artifacts/fofatoto_mac_arm64
+          mv artifacts/fofatoto-windows-amd64/fofatoto.exe artifacts/fofatoto.exe
+          mv artifacts/fofatoto-windows-arm64/fofatoto.exe artifacts/fofatoto_arm64.exe
+          mv artifacts/fofatoto-linux-amd64/fofatoto artifacts/fofatoto
+          mv artifacts/fofatoto-linux-arm64/fofatoto artifacts/fofatoto_arm64
+          mv artifacts/fofatoto-macos-amd64/fofatoto artifacts/fofatoto_mac
+          mv artifacts/fofatoto-macos-arm64/fofatoto artifacts/fofatoto_mac_arm64
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-            files: |
-              artifacts/fofatoto.exe
-              artifacts/fofatoto_arm64.exe
-              artifacts/fofatoto
-              artifacts/fofatoto_arm64
-              artifacts/fofatoto_mac
-              artifacts/fofatoto_mac_arm64
-            body: |
-              ## fofatoto v1.0.0
+          files: |
+            artifacts/fofatoto.exe
+            artifacts/fofatoto_arm64.exe
+            artifacts/fofatoto
+            artifacts/fofatoto_arm64
+            artifacts/fofatoto_mac
+            artifacts/fofatoto_mac_arm64
+          body: |
+            ## fofatoto v1.0.0
 
-              FOFA 查询工具，支持单次查询和多次查询模式。
+            FOFA 查询工具，支持单次查询和多次查询模式。
 
-              ### 下载
+            ### 下载
 
-              | 平台 | 架构 | 文件名 |
-              |------|------|--------|
-              | Windows | amd64 | fofatoto.exe |
-              | Windows | arm64 | fofatoto_arm64.exe |
-              | Linux | amd64 | fofatoto |
-              | Linux | arm64 | fofatoto_arm64 |
-              | macOS | amd64 | fofatoto_mac |
-              | macOS | arm64 (M芯片) | fofatoto_mac_arm64 |
+            | 平台 | 架构 | 文件名 |
+            |------|------|--------|
+            | Windows | amd64 | fofatoto.exe |
+            | Windows | arm64 | fofatoto_arm64.exe |
+            | Linux | amd64 | fofatoto |
+            | Linux | arm64 | fofatoto_arm64 |
+            | macOS | amd64 | fofatoto_mac |
+            | macOS | arm64 (M芯片) | fofatoto_mac_arm64 |
 
-              ### 使用方法
+            ### 使用方法
 
-              ```bash
-              ./fofatoto "domain=baidu.com"
-              ```
+            ```bash
+            ./fofatoto "domain=baidu.com"
+            ```
 
-              详细使用说明请查看 [README](https://github.com/keyblues/fofatoto/blob/main/README.md)
-            tag_name: v1.0.0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            详细使用说明请查看 [README](https://github.com/keyblues/fofatoto/blob/main/README.md)
+          tag_name: v1.0.0
