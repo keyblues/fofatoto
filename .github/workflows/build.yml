@@ -153,13 +153,36 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: |
-            artifacts/fofatoto.exe
-            artifacts/fofatoto_arm64.exe
-            artifacts/fofatoto
-            artifacts/fofatoto_arm64
-            artifacts/fofatoto_mac
-            artifacts/fofatoto_mac_arm64
-          generate_release_notes: true
+            files: |
+              artifacts/fofatoto.exe
+              artifacts/fofatoto_arm64.exe
+              artifacts/fofatoto
+              artifacts/fofatoto_arm64
+              artifacts/fofatoto_mac
+              artifacts/fofatoto_mac_arm64
+            body: |
+              ## fofatoto v1.0.0
+
+              FOFA 查询工具，支持单次查询和多次查询模式。
+
+              ### 下载
+
+              | 平台 | 架构 | 文件名 |
+              |------|------|--------|
+              | Windows | amd64 | fofatoto.exe |
+              | Windows | arm64 | fofatoto_arm64.exe |
+              | Linux | amd64 | fofatoto |
+              | Linux | arm64 | fofatoto_arm64 |
+              | macOS | amd64 | fofatoto_mac |
+              | macOS | arm64 (M芯片) | fofatoto_mac_arm64 |
+
+              ### 使用方法
+
+              ```bash
+              ./fofatoto "domain=baidu.com"
+              ```
+
+              详细使用说明请查看 [README](https://github.com/keyblues/fofatoto/blob/main/README.md)
+            tag_name: v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
