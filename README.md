@@ -2,18 +2,6 @@
 
 FOFA 查询工具，支持单次查询和多次查询模式。
 
-## 安装
-
-```bash
-pip install -r requirements.txt
-```
-
-或直接运行：
-
-```bash
-python3 fofatoto.py
-```
-
 ## 配置
 
 首次运行时会自动创建 `config.json`，填入你的 FOFA API 地址和密钥：
