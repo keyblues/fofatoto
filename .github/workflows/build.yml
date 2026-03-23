@@ -12,55 +12,98 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            platform: windows_amd64
-            artifact: fofatoto.exe
-            python-version: '3.11'
-          - os: ubuntu-latest
-            platform: linux_amd64
-            artifact: fofatoto
-            python-version: '3.11'
-          - os: ubuntu-latest
-            platform: linux_arm64
-            artifact: fofatoto
-            python-version: '3.11'
-          - os: macos-latest
-            platform: macos_amd64
-            artifact: fofatoto
-            python-version: '3.11'
-          - os: macos-14
-            platform: macos_arm64
-            artifact: fofatoto
-            python-version: '3.11'
+          - platform: linux_amd64
+          - platform: linux_arm64
+          - platform: macos_amd64
+          - platform: macos_arm64
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.platform == 'linux_amd64' || matrix.platform == 'linux_arm64' && 'ubuntu-latest' || matrix.platform == 'macos_amd64' && 'macos-latest' || 'macos-14' }}
+
+  build-windows:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-          architecture: ${{ matrix.platform == 'linux_arm64' && 'arm64' || 'x64' }}
-
+          python-version: '3.11'
       - name: Install dependencies
         run: pip install nuitka zstandard
 
       - name: Build
+        run: python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_site,no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --noinclude-IPython-mode=nofollow --noinclude-dask-mode=nofollow --noinclude-numba-mode=nofollow --noinclude-default-mode=nofollow --output-dir=dist --output-filename=fofatoto.exe fofatoto.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fofatoto-windows_amd64
+          path: dist/fofatoto.exe
+
+  build-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux_amd64
+            arch: x86_64
+          - platform: linux_arm64
+            arch: aarch64
+
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
         run: |
-          if [ "${{ matrix.os }}" == "windows-latest" ]; then
-            python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_site,no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --noinclude-IPython-mode=nofollow --noinclude-dask-mode=nofollow --noinclude-numba-mode=nofollow --noinclude-default-mode=nofollow --output-dir=dist --output-filename=${{ matrix.artifact }} fofatoto.py
-          else
-            python -m nuitka --onefile --lto=yes --static-libpython=yes --remove-output --assume-yes-for-downloads --python-flag=no_site,no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --noinclude-IPython-mode=nofollow --noinclude-dask-mode=nofollow --noinclude-numba-mode=nofollow --noinclude-default-mode=nofollow --output-dir=dist --output-filename=${{ matrix.artifact }} fofatoto.py
-          fi
+          apt-get update -qq && apt-get install -y -qq \
+            python3 python3-dev python3-pip \
+            gcc g++ make patchelf wget \
+            zstd \
+            > /dev/null 2>&1 && rm -rf /var/lib/apt/lists/*
+
+      - name: Install nuitka
+        run: pip3 install --break-system-packages nuitka zstandard
+
+      - name: Build
+        run: python3 -m nuitka --onefile --lto=yes --static-libpython=yes --remove-output --assume-yes-for-downloads --python-flag=no_site,no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --noinclude-IPython-mode=nofollow --noinclude-dask-mode=nofollow --noinclude-numba-mode=nofollow --noinclude-default-mode=nofollow --output-dir=dist --output-filename=fofatoto fofatoto.py
+
+      - name: Copy artifact
+        run: cp dist/fofatoto /tmp/fofatoto
 
       - uses: actions/upload-artifact@v4
         with:
           name: fofatoto-${{ matrix.platform }}
-          path: dist/${{ matrix.artifact }}
+          path: /tmp/fofatoto
+
+  build-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos_amd64
+            runner: macos-latest
+          - platform: macos_arm64
+            runner: macos-14
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install nuitka zstandard
+
+      - name: Build
+        run: python -m nuitka --onefile --lto=yes --static-libpython=yes --remove-output --assume-yes-for-downloads --python-flag=no_site,no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --noinclude-IPython-mode=nofollow --noinclude-dask-mode=nofollow --noinclude-numba-mode=nofollow --noinclude-default-mode=nofollow --output-dir=dist --output-filename=fofatoto fofatoto.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fofatoto-${{ matrix.platform }}
+          path: dist/fofatoto
 
   release:
-    needs: [build]
+    needs: [build-windows, build-linux, build-macos]
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     permissions:
