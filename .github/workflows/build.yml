@@ -16,6 +16,12 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install nuitka zstandard
+
+      - name: Verify zstandard
+        run: |
+          pip show zstandard
+          python -c "import zstandard; print('zstandard version:', zstandard.__version__)"
+
       - name: Build Windows executable (amd64)
         run: |
           python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto.exe fofatoto.py
