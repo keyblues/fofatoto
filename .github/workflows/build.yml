@@ -60,9 +60,15 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install nuitka zstandard
+      - name: Verify zstandard
+        run: |
+          pip show zstandard
+          python -c "import zstandard; print('zstandard version:', zstandard.__version__)"
+
       - name: Build Linux executable (amd64)
         run: |
-          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py 2>&1 | tee build.log
+          grep -i "compression\|zstd\|zstandard" build.log || echo "No compression info found"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -81,7 +87,8 @@ jobs:
         run: pip install nuitka zstandard
       - name: Build Linux executable (arm64)
         run: |
-          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py
+          python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --output-filename=fofatoto fofatoto.py 2>&1 | tee build.log
+          grep -i "compression\|zstd\|zstandard" build.log || echo "No compression info found"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
