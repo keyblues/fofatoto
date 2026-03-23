@@ -137,12 +137,12 @@ jobs:
 
       - name: Rename
         run: |
-          mv artifacts/fofatoto-windows-amd64/fofatoto.exe artifacts/fofatoto-windows-amd64.exe
-          mv artifacts/fofatoto-windows-arm64/fofatoto.exe artifacts/fofatoto-windows-arm64.exe
-          mv artifacts/fofatoto-linux-amd64/fofatoto artifacts/fofatoto-linux-amd64
-          mv artifacts/fofatoto-linux-arm64/fofatoto artifacts/fofatoto-linux-arm64
-          mv artifacts/fofatoto-macos-amd64/fofatoto artifacts/fofatoto-macos-amd64
-          mv artifacts/fofatoto-macos-arm64/fofatoto artifacts/fofatoto-macos-arm64
+          cp artifacts/fofatoto-windows-amd64/fofatoto.exe artifacts/fofatoto-windows-amd64.exe
+          cp artifacts/fofatoto-windows-arm64/fofatoto.exe artifacts/fofatoto-windows-arm64.exe
+          cp artifacts/fofatoto-linux-amd64/fofatoto artifacts/fofatoto-linux-amd64
+          cp artifacts/fofatoto-linux-arm64/fofatoto artifacts/fofatoto-linux-arm64
+          cp artifacts/fofatoto-macos-amd64/fofatoto artifacts/fofatoto-macos-amd64
+          cp artifacts/fofatoto-macos-arm64/fofatoto artifacts/fofatoto-macos-arm64
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
