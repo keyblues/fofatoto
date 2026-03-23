@@ -20,7 +20,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install nuitka zstandard upx
+          pip install nuitka zstandard
 
       - name: Build Windows executable
         run: |
