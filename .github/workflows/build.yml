@@ -55,7 +55,6 @@ jobs:
       - name: Install dependencies
         run: |
           pip install nuitka zstandard
-          sudo apt-get update && sudo apt-get install -y upx
 
       - name: Build Linux executable
         run: |
@@ -70,11 +69,6 @@ jobs:
             --noinclude-pydoc-mode=nofollow \
             --output-filename=fofatoto \
             fofatoto.py
-
-      - name: Compress with UPX
-        run: |
-          upx -9 fofatoto -o fofatoto.upx
-          mv fofatoto.upx fofatoto
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
