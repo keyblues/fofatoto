@@ -43,6 +43,7 @@ FOFA 查询工具，支持单次查询和多次查询模式。
 | `-json` | 导出 JSON 格式 |
 | `-f, --fields` | 查询字段，控制 FOFA API 返回哪些字段，默认 host,ip,port,protocol |
 | `--dedup` | 根据指定字段去重，多个字段用逗号分隔 |
+| `-b, --batch FILE | 批量查询文件，每行一个查询语句 |
 | `--full` | 搜索全部数据（不止一年） |
 | `-v, --verbose` | 显示详细信息 |
 
@@ -72,6 +73,9 @@ FOFA 查询工具，支持单次查询和多次查询模式。
 
 # 搜索超过一年的全部数据
 ./fofatoto "domain=baidu.com" -l max --full -o all.csv
+
+# 批量查询模式
+./fofatoto -b queries.txt -o batch_results.csv
 ```
 
 ## 多次查询模式
@@ -81,6 +85,32 @@ FOFA 查询工具，支持单次查询和多次查询模式。
 - 每次从 FOFA API 获取最多 10000 条数据
 - 通过 `lastupdatetime` 字段递进获取下一批数据
 - 默认完成 80% 的数据，可通过 `--fill` 调整
+
+## 批量查询模式
+
+使用 `-b` 或 `--batch` 参数指定包含多个查询语句的文件，逐个执行查询并合并结果：
+
+```bash
+# queries.txt 内容示例
+domain=baidu.com
+domain=qq.com
+ip=1.1.1.1/24
+protocol=http
+```
+
+```bash
+# 执行批量查询
+./fofatoto -b queries.txt -o batch_results.csv
+
+# 批量查询时使用 max 模式
+./fofatoto -b queries.txt -l max -o batch_all.csv
+```
+
+批量查询特性：
+- 自动跳过空行和 `#` 开头的注释行
+- 显示每个查询的执行进度
+- 所有结果合并后统一导出
+- 查询间隔 2 秒，避免 API 限流
 
 ## TXT 导出格式
 

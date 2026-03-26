@@ -589,6 +589,7 @@ def build_parser():
     parser.add_argument("query", nargs="?", help="FOFA 查询语句，如: domain=baidu.com")
     parser.add_argument("-o", "--output", help="输出文件名（含后缀），如 results.csv")
     parser.add_argument("-l", "--limit", help="最大返回数量，支持 >10000 或 'max'（导出全部）", default="100")
+    parser.add_argument("-b", "--batch", dest="batch_file", metavar="FILE", help="批量查询文件，每行一个查询语句")
     parser.add_argument("--fill", type=float, default=0.8, help="多次查询完成百分比（0.0-1.0），仅 -l>10000 或 max 时生效")
     parser.add_argument("-csv", action="store_true", help="导出 CSV 格式")
     parser.add_argument("-txt", action="store_true", help="导出 TXT 格式（URL 列表）")
@@ -641,6 +642,46 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
+    # 批量查询模式
+    if args.batch_file:
+        try:
+            batch_queries = load_batch_queries(Path(args.batch_file))
+            print(f"[*] 批量模式: 已加载 {len(batch_queries)} 个查询")
+
+            if not any([args.csv, args.txt, args.json]):
+                args.csv = True
+
+            if not args.output:
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                if args.json:
+                    args.output = f"fofa_batch_{timestamp}.json"
+                elif args.txt:
+                    args.output = f"fofa_batch_{timestamp}.txt"
+                else:
+                    args.output = f"fofa_batch_{timestamp}.csv"
+
+            all_results = run_batch_search(client, batch_queries, args)
+            print(f"\n[*] 批量查询完成: 共获取 {len(all_results)} 条结果")
+
+            if not all_results:
+                print("[-] 没有找到任何结果")
+                sys.exit(0)
+
+            export_results(all_results, args)
+            sys.exit(0)
+        except FileNotFoundError as e:
+            print(f"[!] {e}", file=sys.stderr)
+            sys.exit(1)
+        except ValueError as e:
+            print(f"[!] {e}", file=sys.stderr)
+            sys.exit(1)
+        except FofaAPIError as e:
+            print(f"[-] API 错误: {e}", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"[-] 错误: {e}", file=sys.stderr)
+            sys.exit(1)
+
     # 没有查询语句时显示 usage
     if not args.query:
         sys.stderr.write(parser.format_usage())
@@ -652,7 +693,6 @@ def main():
 
     # 没有指定输出文件名时自动生成
     if not args.output:
-        from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         if args.json:
             args.output = f"fofa_results_{timestamp}.json"
@@ -712,6 +752,94 @@ def main():
     except Exception as e:
         print(f"[-] 错误: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def load_batch_queries(file_path: Path) -> list[tuple[str, int]]:
+    """
+    加载批量查询文件
+
+    Args:
+        file_path: 批量查询文件路径
+
+    Returns:
+        [(查询语句, 行号), ...]
+    """
+    if not file_path.exists():
+        raise FileNotFoundError(f"批量查询文件不存在: {file_path}")
+
+    queries = []
+    for line_no, line in enumerate(file_path.read_text(encoding="utf-8").splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        queries.append((line, line_no))
+
+    if not queries:
+        raise ValueError("批量查询文件中没有有效的查询语句")
+
+    return queries
+
+
+def run_batch_search(client: FofaClient, queries: list[tuple[str, int]], args) -> list[FofaResult]:
+    """
+    执行批量查询
+
+    Args:
+        client: FOFA 客户端
+        queries: [(查询语句, 行号), ...]
+        args: 命令行参数
+
+    Returns:
+        所有查询的结果列表
+    """
+    all_results = []
+    total_queries = len(queries)
+    bar_width = 30
+
+    for idx, (query, line_no) in enumerate(queries, 1):
+        query = query.strip()
+        if not query:
+            continue
+
+        print(f"\n{CYAN}[{idx}/{total_queries}] 第 {line_no} 行查询:{RESET} {query}")
+
+        try:
+            limit_str = str(args.limit)
+            is_max = limit_str.lower() == "max"
+            limit_value = 0 if is_max else int(limit_str)
+
+            query_fields = args.fields
+            if args.dedup:
+                dedup_fields = set(f.strip() for f in args.dedup.split(",") if f.strip())
+                user_fields = set(f.strip() for f in (args.fields or "").split(",") if f.strip())
+                extra_fields = dedup_fields - user_fields
+                if extra_fields:
+                    query_fields = args.fields + "," + ",".join(extra_fields)
+
+            if limit_value > 10000 or is_max:
+                max_size = 0 if is_max else limit_value
+                stats = client.search_all_efficient(
+                    query,
+                    max_size=max_size,
+                    fields=query_fields,
+                    fill_percent=args.fill,
+                    full=args.full,
+                )
+            else:
+                stats = client.search(query, size=limit_value, fields=query_fields, full=args.full)
+
+            all_results.extend(stats.results)
+            print(f"    {GREEN}+{RESET} 获取 {len(stats.results)} 条结果")
+
+        except FofaAPIError as e:
+            print(f"    {RED}!{RESET} API 错误: {e}")
+        except Exception as e:
+            print(f"    {RED}!{RESET} 错误: {e}")
+
+        if idx < total_queries:
+            time.sleep(2)
+
+    return all_results
 
 
 def export_results(results, args):
