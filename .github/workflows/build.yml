@@ -134,30 +134,13 @@ jobs:
           body: |
             ## fofatoto ${{ github.ref_name }}
 
-            FOFA 查询工具，支持单次查询、多次查询和批量查询模式。
+            ### 更新内容
 
-            ### 新增功能
+            ${{ github.event_name == 'workflow_dispatch' && '手动触发构建' || '请查看提交记录获取更新详情' }}
 
-            - 批量查询模式，支持占位符替换
-            - 新增 `-b/--batch` 参数
-            - 新增 `-p/--placeholder` 自定义占位符
-
-            ### 下载
-
-            | 平台 | 架构 | 文件名 |
-            |------|------|--------|
-            | Windows | amd64 | fofatoto.exe |
-            | Linux | amd64 | fofatoto |
-            | Linux | arm64 | fofatoto_arm64 |
-            | macOS | amd64 | fofatoto_mac |
-            | macOS | arm64 (M芯片) | fofatoto_mac_arm64 |
-
-            ### 使用方法
+            ### 变更日志
 
             ```bash
-            ./fofatoto "domain=baidu.com"
-            ./fofatoto "host={}" -b targets.txt
+            git log ${{ github.ref_name }}~1..${{ github.ref_name }} --oneline
             ```
-
-            详细使用说明请查看 [README](https://github.com/keyblues/fofatoto/blob/main/README.md)
           tag_name: ${{ github.ref_name }}
