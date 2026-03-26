@@ -43,7 +43,8 @@ FOFA 查询工具，支持单次查询和多次查询模式。
 | `-json` | 导出 JSON 格式 |
 | `-f, --fields` | 查询字段，控制 FOFA API 返回哪些字段，默认 host,ip,port,protocol |
 | `--dedup` | 根据指定字段去重，多个字段用逗号分隔 |
-| `-b, --batch FILE | 批量查询文件，每行一个查询语句 |
+| `-b, --batch FILE` | 批量查询文件，配合占位符使用 |
+| `-p, --placeholder` | 占位符格式，默认 {} |
 | `--full` | 搜索全部数据（不止一年） |
 | `-v, --verbose` | 显示详细信息 |
 
@@ -74,8 +75,12 @@ FOFA 查询工具，支持单次查询和多次查询模式。
 # 搜索超过一年的全部数据
 ./fofatoto "domain=baidu.com" -l max --full -o all.csv
 
-# 批量查询模式
-./fofatoto -b queries.txt -o batch_results.csv
+# 批量查询模式（占位符替换）
+./fofatoto "host={}" -b targets.txt -o batch_results.csv
+
+# targets.txt 内容
+# baidu.com
+# qq.com
 ```
 
 ## 多次查询模式
@@ -88,25 +93,31 @@ FOFA 查询工具，支持单次查询和多次查询模式。
 
 ## 批量查询模式
 
-使用 `-b` 或 `--batch` 参数指定包含多个查询语句的文件，逐个执行查询并合并结果：
+使用 `-b` 或 `--batch` 参数指定包含多个目标值的文件，结合查询语句中的占位符 `{}` 进行批量查询：
 
 ```bash
-# queries.txt 内容示例
-domain=baidu.com
-domain=qq.com
-ip=1.1.1.1/24
-protocol=http
+# 占位符批量查询
+./fofatoto "host={}" -b targets.txt -o results.csv
+
+# targets.txt 内容示例
+baidu.com
+qq.com
+google.com
+# 这会自动执行:
+#   host=baidu.com
+#   host=qq.com
+#   host=google.com
 ```
 
-```bash
-# 执行批量查询
-./fofatoto -b queries.txt -o batch_results.csv
+支持自定义占位符格式（默认 `{}`）：
 
-# 批量查询时使用 max 模式
-./fofatoto -b queries.txt -l max -o batch_all.csv
+```bash
+./fofatoto "domain=$TARGET" -b targets.txt -p "\$TARGET" -o results.csv
 ```
 
 批量查询特性：
+- 查询语句中包含占位符时，文件每行值会替换占位符
+- 查询语句中不包含占位符时，每行作为独立查询语句执行
 - 自动跳过空行和 `#` 开头的注释行
 - 显示每个查询的执行进度
 - 所有结果合并后统一导出

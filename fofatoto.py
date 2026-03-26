@@ -589,8 +589,9 @@ def build_parser():
     parser.add_argument("query", nargs="?", help="FOFA 查询语句，如: domain=baidu.com")
     parser.add_argument("-o", "--output", help="输出文件名（含后缀），如 results.csv")
     parser.add_argument("-l", "--limit", help="最大返回数量，支持 >10000 或 'max'（导出全部）", default="100")
-    parser.add_argument("-b", "--batch", dest="batch_file", metavar="FILE", help="批量查询文件，每行一个查询语句")
+    parser.add_argument("-b", "--batch", dest="batch_file", metavar="FILE", help="批量查询文件，每行一个查询语句（配合占位符使用）")
     parser.add_argument("--fill", type=float, default=0.8, help="多次查询完成百分比（0.0-1.0），仅 -l>10000 或 max 时生效")
+    parser.add_argument("-p", "--placeholder", default="{}", help="占位符格式，默认 {}，配合 -b 使用，如: python fofatoto.py \"host={}\" -b targets.txt")
     parser.add_argument("-csv", action="store_true", help="导出 CSV 格式")
     parser.add_argument("-txt", action="store_true", help="导出 TXT 格式（URL 列表）")
     parser.add_argument("-json", action="store_true", help="导出 JSON 格式")
@@ -645,8 +646,15 @@ def main():
     # 批量查询模式
     if args.batch_file:
         try:
-            batch_queries = load_batch_queries(Path(args.batch_file))
-            print(f"[*] 批量模式: 已加载 {len(batch_queries)} 个查询")
+            targets = load_batch_targets(Path(args.batch_file))
+            placeholder = args.placeholder
+
+            if args.query and placeholder in args.query:
+                queries = expand_placeholder_query(args.query, [t[0] for t in targets], placeholder)
+                print(f"[*] 批量模式: 已加载 {len(queries)} 个查询 (占位符: {placeholder})")
+            else:
+                queries = [(t[0], t[1]) for t in targets]
+                print(f"[*] 批量模式: 已加载 {len(queries)} 个查询")
 
             if not any([args.csv, args.txt, args.json]):
                 args.csv = True
@@ -660,7 +668,7 @@ def main():
                 else:
                     args.output = f"fofa_batch_{timestamp}.csv"
 
-            all_results = run_batch_search(client, batch_queries, args)
+            all_results = run_batch_search(client, queries, args)
             print(f"\n[*] 批量查询完成: 共获取 {len(all_results)} 条结果")
 
             if not all_results:
@@ -754,30 +762,49 @@ def main():
         sys.exit(1)
 
 
-def load_batch_queries(file_path: Path) -> list[tuple[str, int]]:
+def expand_placeholder_query(base_query: str, targets: list[str], placeholder: str) -> list[tuple[str, int]]:
     """
-    加载批量查询文件
+    将占位符替换为具体值
 
     Args:
-        file_path: 批量查询文件路径
+        base_query: 包含占位符的基础查询语句，如 "host={}"
+        targets: 目标值列表
+        placeholder: 占位符格式，如 "{}"
 
     Returns:
-        [(查询语句, 行号), ...]
+        [(替换后的查询语句, 目标索引), ...]
+    """
+    results = []
+    for idx, target in enumerate(targets, 1):
+        query = base_query.replace(placeholder, target)
+        results.append((query, idx))
+    return results
+
+
+def load_batch_targets(file_path: Path) -> list[tuple[str, int]]:
+    """
+    加载批量目标文件
+
+    Args:
+        file_path: 批量目标文件路径
+
+    Returns:
+        [(目标值, 行号), ...]
     """
     if not file_path.exists():
-        raise FileNotFoundError(f"批量查询文件不存在: {file_path}")
+        raise FileNotFoundError(f"批量目标文件不存在: {file_path}")
 
-    queries = []
+    targets = []
     for line_no, line in enumerate(file_path.read_text(encoding="utf-8").splitlines(), 1):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        queries.append((line, line_no))
+        targets.append((line, line_no))
 
-    if not queries:
-        raise ValueError("批量查询文件中没有有效的查询语句")
+    if not targets:
+        raise ValueError("批量目标文件中没有有效的目标值")
 
-    return queries
+    return targets
 
 
 def run_batch_search(client: FofaClient, queries: list[tuple[str, int]], args) -> list[FofaResult]:
@@ -794,14 +821,13 @@ def run_batch_search(client: FofaClient, queries: list[tuple[str, int]], args) -
     """
     all_results = []
     total_queries = len(queries)
-    bar_width = 30
 
     for idx, (query, line_no) in enumerate(queries, 1):
         query = query.strip()
         if not query:
             continue
 
-        print(f"\n{CYAN}[{idx}/{total_queries}] 第 {line_no} 行查询:{RESET} {query}")
+        print(f"\n{CYAN}[{idx}/{total_queries}] 查询:{RESET} {query}")
 
         try:
             limit_str = str(args.limit)
