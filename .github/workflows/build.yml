@@ -102,8 +102,8 @@ jobs:
       - name: Create tag
         if: github.event_name == 'workflow_dispatch'
         run: |
-          git tag v1.0.0
-          git push origin v1.0.0
+          git tag ${{ github.ref_name }}
+          git push origin ${{ github.ref_name }}
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -132,9 +132,15 @@ jobs:
             fofatoto_mac
             fofatoto_mac_arm64
           body: |
-            ## fofatoto v1.0.0
+            ## fofatoto ${{ github.ref_name }}
 
-            FOFA 查询工具，支持单次查询和多次查询模式。
+            FOFA 查询工具，支持单次查询、多次查询和批量查询模式。
+
+            ### 新增功能
+
+            - 批量查询模式，支持占位符替换
+            - 新增 `-b/--batch` 参数
+            - 新增 `-p/--placeholder` 自定义占位符
 
             ### 下载
 
@@ -150,7 +156,8 @@ jobs:
 
             ```bash
             ./fofatoto "domain=baidu.com"
+            ./fofatoto "host={}" -b targets.txt
             ```
 
             详细使用说明请查看 [README](https://github.com/keyblues/fofatoto/blob/main/README.md)
-          tag_name: v1.0.0
+          tag_name: ${{ github.ref_name }}
