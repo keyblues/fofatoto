@@ -27,8 +27,8 @@ BANNER = r"""
  |_|   \___/|_|/_/   \_\   |_| \___/ |_| \___/ 
                                                
 
-        			FOFA Query Tool v1.0
-        			https://fofa.info
+        			FOFA Query Tool v1.1.0
+        			https://github.com/keyblues/fofatoto
 """
 
 GREEN = "\033[92m"
@@ -93,7 +93,7 @@ def ensure_config_exists() -> bool:
         return True
 
     default_config = {
-        "url": "https://fofa.info",
+        "url": "https://github.com/keyblues/fofatoto",
         "key": "your-fofa-key-here"
     }
 
