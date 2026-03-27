@@ -27,7 +27,7 @@ BANNER = r"""
  |_|   \___/|_|/_/   \_\   |_| \___/ |_| \___/ 
                                                
 
-        			FOFA Query Tool v1.1.0
+				FOFA Query Tool v1.1.1
         			https://github.com/keyblues/fofatoto
 """
 
