@@ -428,6 +428,18 @@ class FofaClient:
 
 # ============ 导出相关 ============
 
+def build_url(r: FofaResult) -> str:
+    """根据 host、protocol、port 组装完整 URL"""
+    if not r.host:
+        return ""
+    if r.host.startswith("http"):
+        return r.host
+    protocol = r.protocol or "http"
+    if r.port and r.port not in ("80", "443"):
+        return f"{protocol}://{r.host}:{r.port}"
+    return f"{protocol}://{r.host}"
+
+
 def export_csv(results: list[FofaResult], output_path: Path, fields: Optional[str] = None, dedup_field: Optional[str] = None) -> int:
     """导出为 CSV 文件"""
     if not results:
@@ -453,11 +465,16 @@ def export_csv(results: list[FofaResult], output_path: Path, fields: Optional[st
         all_keys.update(r.to_dict().keys())
     dynamic_extra = [f for f in all_keys if f not in base_fields and not f.startswith("_") and f not in fieldnames]
 
+    requested_has_url = fields and "url" in [f.strip() for f in fields.split(",")]
+
     with output_path.open("w", encoding="utf-8-sig", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames + extra_fields + dynamic_extra, extrasaction='ignore')
         writer.writeheader()
         for r in results:
-            writer.writerow(r.to_dict())
+            row = r.to_dict()
+            if requested_has_url and "url" not in row:
+                row["url"] = build_url(r)
+            writer.writerow(row)
 
     return len(results)
 
@@ -469,9 +486,13 @@ def export_json(results: list[FofaResult], output_path: Path, fields: Optional[s
 
     results = dedup_results(results, fields, dedup_field)
 
+    requested_has_url = fields and "url" in [f.strip() for f in fields.split(",")]
+
     data = []
     for r in results:
         d = r.to_dict()
+        if requested_has_url and "url" not in d:
+            d["url"] = build_url(r)
         d = {k: v for k, v in d.items() if v != "" and v is not None}
         data.append(d)
     output_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -519,6 +540,8 @@ def dedup_results(results: list[FofaResult], fields: Optional[str], dedup_field:
                 key_tuple.append(r.domain or "")
             elif f == "protocol":
                 key_tuple.append(r.protocol or "")
+            elif f == "url":
+                key_tuple.append(r.host or "")
         key = tuple(key_tuple)
         if any(key_tuple) and key not in seen:
             seen.add(key)
