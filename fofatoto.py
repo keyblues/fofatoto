@@ -230,10 +230,6 @@ class FofaClient:
         """
         if fields is None:
             fields = "host,ip,port,protocol,domain,title,server,country,city"
-        else:
-            fields = fields.replace("url,", "host,").replace(",url,", ",host,").replace(",url", ",host")
-            if fields == "url":
-                fields = "host"
 
         qbase64 = base64.b64encode(query.encode()).decode()
         url = (
@@ -434,14 +430,17 @@ class FofaClient:
 
 def build_url(r: FofaResult) -> str:
     """根据 host、protocol、port 组装完整 URL"""
-    if not r.host:
+    host = r.host
+    if not host and "url" in r._extra:
+        host = r._extra["url"]
+    if not host:
         return ""
-    if r.host.startswith("http"):
-        return r.host
+    if host.startswith("http"):
+        return host
     protocol = r.protocol or "http"
     if r.port and r.port not in ("80", "443"):
-        return f"{protocol}://{r.host}:{r.port}"
-    return f"{protocol}://{r.host}"
+        return f"{protocol}://{host}:{r.port}"
+    return f"{protocol}://{host}"
 
 
 def export_csv(results: list[FofaResult], output_path: Path, fields: Optional[str] = None, dedup_field: Optional[str] = None) -> int:
