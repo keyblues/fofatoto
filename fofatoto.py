@@ -6,6 +6,7 @@ FOFA 查询工具 - 单文件工具
 import argparse
 import json
 import csv
+import ipaddress
 import sys
 import base64
 import time
@@ -27,7 +28,7 @@ BANNER = r"""
  |_|   \___/|_|/_/   \_\   |_| \___/ |_| \___/ 
                                                
 
-				FOFA Query Tool v1.1.1
+				FOFA Query Tool v1.1.2
         			https://github.com/keyblues/fofatoto
 """
 
@@ -98,7 +99,6 @@ def ensure_config_exists() -> bool:
     }
 
     try:
-        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(
             json.dumps(default_config, ensure_ascii=False, indent=4),
             encoding="utf-8"
@@ -197,6 +197,17 @@ def _ensure_fields_for_url(fields: str) -> str:
     return fields
 
 
+def _infer_domain_from_host(host: str) -> str:
+    """从 host 或 URL 中提取可用 domain，IP 字面量返回空字符串"""
+    parsed = urlparse(host if host.startswith("http") else f"//{host}")
+    hostname = parsed.hostname or host
+    try:
+        ipaddress.ip_address(hostname)
+        return ""
+    except ValueError:
+        return hostname
+
+
 class FofaClient:
     """FOFA API 客户端"""
 
@@ -281,16 +292,7 @@ class FofaClient:
                 else:
                     result._extra[field] = value
             if "domain" in fields_list and result.host:
-                if result.host.startswith("http"):
-                    parsed = urlparse(result.host)
-                    netloc = parsed.netloc
-                    if ":" in netloc:
-                        netloc = netloc.split(":")[0]
-                    result.domain = netloc
-                elif result.host.replace(".", "").replace(":", "").isdigit():
-                    result.domain = ""
-                else:
-                    result.domain = result.host
+                result.domain = _infer_domain_from_host(result.host)
             results.append(result)
             if result.ip:
                 unique_ips.add(result.ip)
@@ -348,7 +350,7 @@ class FofaClient:
             percent = fetched / total_estimated
             filled = int(bar_width * percent)
             bar = f"{GREEN}{'=' * filled}{RESET}{'~' if filled < bar_width else ''}{' ' * (bar_width - filled - 1)}"
-            pct_color = YELLOW if percent < 0.5 else GREEN
+            pct_color = YELLOW if percent < 50 else GREEN
             print(f"\r[{bar}] {pct_color}{percent*100:5.1f}%{RESET} | {GREEN}{fetched:>6}{RESET}/{total_estimated:<6} | {RED}配额:{total_quota_used:>6}{RESET} | {msg}", end="", flush=True)
 
         def print_done():
@@ -373,8 +375,8 @@ class FofaClient:
         print()
 
         if target_count <= 0:
-            print("[!] 目标为 0，跳过批量抓取")
-            return SearchStats(total=0, unique_ips=0, results=[])
+            print("[*] 目标为 0，跳过批量抓取")
+            return SearchStats(total=total_estimated, unique_ips=0, results=[])
 
         print_progress("开始...")
 
@@ -446,7 +448,7 @@ class FofaClient:
             print(f"[*] 独立 IP: {CYAN}{len(unique_ips):,}{RESET}")
         else:
             print_done()
-        return SearchStats(total=len(all_results), unique_ips=len(unique_ips), results=all_results)
+        return SearchStats(total=total_estimated, unique_ips=len(unique_ips), results=all_results)
 
 
 # ============ 导出相关 ============
@@ -457,8 +459,15 @@ def build_url(r: FofaResult) -> str:
         return ""
     if r.host.startswith("http"):
         return r.host
+
+    parsed = urlparse(f"//{r.host}")
+    try:
+        host_has_port = parsed.port is not None
+    except ValueError:
+        host_has_port = False
+
     protocol = r.protocol or "http"
-    if r.port and r.port not in ("80", "443"):
+    if r.port and r.port not in ("80", "443") and not host_has_port:
         return f"{protocol}://{r.host}:{r.port}"
     return f"{protocol}://{r.host}"
 
@@ -476,12 +485,9 @@ def export_csv(results: list[FofaResult], output_path: Path, fields: Optional[st
                   "country_name", "base_protocol", "link"]
 
     if fields:
-        requested = [f.strip() for f in fields.split(",")]
-        fieldnames = [f for f in requested if f in base_fields]
-        extra_fields = [f for f in requested if f not in base_fields]
+        fieldnames = [f.strip() for f in fields.split(",") if f.strip()]
     else:
         fieldnames = base_fields
-        extra_fields = []
 
     all_keys = set()
     for r in results:
@@ -491,11 +497,11 @@ def export_csv(results: list[FofaResult], output_path: Path, fields: Optional[st
     requested_has_url = fields and "url" in [f.strip() for f in fields.split(",")]
 
     with output_path.open("w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames + extra_fields + dynamic_extra, extrasaction='ignore')
+        writer = csv.DictWriter(f, fieldnames=fieldnames + dynamic_extra, extrasaction='ignore')
         writer.writeheader()
         for r in results:
             row = r.to_dict()
-            if requested_has_url and "url" not in row:
+            if requested_has_url and not row.get("url"):
                 row["url"] = build_url(r)
             writer.writerow(row)
 
@@ -510,13 +516,16 @@ def export_json(results: list[FofaResult], output_path: Path, fields: Optional[s
     results = dedup_results(results, fields, dedup_field)
 
     requested_has_url = fields and "url" in [f.strip() for f in fields.split(",")]
+    requested_fields = [f.strip() for f in fields.split(",") if f.strip()] if fields else None
 
     data = []
     for r in results:
         d = r.to_dict()
-        if requested_has_url and "url" not in d:
+        if requested_has_url and not d.get("url"):
             d["url"] = build_url(r)
         d = {k: v for k, v in d.items() if v != "" and v is not None}
+        if requested_fields is not None:
+            d = {k: d[k] for k in requested_fields if k in d}
         data.append(d)
     output_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return len(results)
@@ -564,7 +573,7 @@ def dedup_results(results: list[FofaResult], fields: Optional[str], dedup_field:
             elif f == "protocol":
                 key_tuple.append(r.protocol or "")
             elif f == "url":
-                key_tuple.append(r.host or "")
+                key_tuple.append(build_url(r) or "")
         key = tuple(key_tuple)
         if any(key_tuple) and key not in seen:
             seen.add(key)
@@ -601,14 +610,7 @@ def export_txt(results: list[FofaResult], output_path: Path, fields: Optional[st
                     count += 1
             else:
                 if r.host:
-                    if r.host.startswith("http"):
-                        f.write(f"{r.host}\n")
-                    else:
-                        protocol = r.protocol or "http"
-                        if r.port and r.port not in ("80", "443"):
-                            f.write(f"{protocol}://{r.host}:{r.port}\n")
-                        else:
-                            f.write(f"{protocol}://{r.host}\n")
+                    f.write(f"{build_url(r)}\n")
                     count += 1
                 elif r.ip:
                     f.write(f"{r.ip}\n")
