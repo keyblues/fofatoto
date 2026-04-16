@@ -161,9 +161,11 @@ class FofaResult:
         result = asdict(self)
         result.update(self._extra)
         for key in list(result.keys()):
+            if key.startswith("_"):
+                del result[key]
+                continue
             if result[key] == "" and key not in self._extra:
-                if key.startswith("_"):
-                    del result[key]
+                del result[key]
         return result
 
 
@@ -186,9 +188,9 @@ class FofaAPIError(Exception):
 
 def _ensure_fields_for_url(fields: str) -> str:
     """当请求包含 url 字段时，确保 host,ip,port,protocol 字段存在"""
-    if "url" in fields:
+    requested = {f.strip() for f in fields.split(",")}
+    if "url" in requested:
         needed = {"host", "ip", "port", "protocol"}
-        requested = {f.strip() for f in fields.split(",")}
         missing = needed - requested
         if missing:
             fields = fields + "," + ",".join(missing)
@@ -215,7 +217,7 @@ class FofaClient:
             data = json.loads(resp.read().decode())
             if data.get("error"):
                 raise FofaAPIError(f"获取用量失败: {data.get('errmsg', '未知错误')}")
-            return data if not data.get("error") else {}
+            return data
         except Exception as e:
             raise FofaAPIError(f"获取用量失败: {e}")
 
@@ -369,6 +371,11 @@ class FofaClient:
         target_count = int(total_estimated * fill_percent)
         print(f"\n[*] 匹配总量: {total_estimated:,} | 目标: {target_count:,} ({int(fill_percent*100)}%)")
         print()
+
+        if target_count <= 0:
+            print("[!] 目标为 0，跳过批量抓取")
+            return SearchStats(total=0, unique_ips=0, results=[])
+
         print_progress("开始...")
 
         before_time = None
@@ -423,7 +430,7 @@ class FofaClient:
                     except Exception:
                         before_time = batch_min_time
                 else:
-                    before_time = None
+                    break
 
                 time.sleep(api_rate_limit)
 
@@ -912,20 +919,37 @@ def export_results(results, args):
     output_path = Path(args.output)
     exported = 0
 
+    formats = []
     if args.csv:
-        csv_path = unique_path(output_path)
+        formats.append(("csv", ".csv", export_csv, "CSV"))
+    if args.txt:
+        formats.append(("txt", ".txt", export_txt, "TXT"))
+    if args.json:
+        formats.append(("json", ".json", export_json, "JSON"))
+
+    def resolve_output_path(suffix: str) -> Path:
+        if len(formats) == 1:
+            return unique_path(output_path)
+        if output_path.suffix:
+            target = output_path.with_suffix(suffix)
+        else:
+            target = output_path.parent / f"{output_path.name}{suffix}"
+        return unique_path(target)
+
+    if args.csv:
+        csv_path = resolve_output_path(".csv")
         count = export_csv(results, csv_path, fields=args.fields, dedup_field=args.dedup)
         print(f"[+] 已导出 CSV: {csv_path} ({count} 条)")
         exported += 1
 
     if args.txt:
-        txt_path = unique_path(output_path)
+        txt_path = resolve_output_path(".txt")
         count = export_txt(results, txt_path, fields=args.fields, dedup_field=args.dedup)
         print(f"[+] 已导出 TXT: {txt_path} ({count} 条)")
         exported += 1
 
     if args.json:
-        json_path = unique_path(output_path)
+        json_path = resolve_output_path(".json")
         count = export_json(results, json_path, fields=args.fields, dedup_field=args.dedup)
         print(f"[+] 已导出 JSON: {json_path} ({count} 条)")
         exported += 1
