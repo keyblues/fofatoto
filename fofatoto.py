@@ -98,6 +98,7 @@ def ensure_config_exists() -> bool:
     }
 
     try:
+        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(
             json.dumps(default_config, ensure_ascii=False, indent=4),
             encoding="utf-8"
@@ -345,7 +346,7 @@ class FofaClient:
             percent = fetched / total_estimated
             filled = int(bar_width * percent)
             bar = f"{GREEN}{'=' * filled}{RESET}{'~' if filled < bar_width else ''}{' ' * (bar_width - filled - 1)}"
-            pct_color = YELLOW if percent < 50 else GREEN
+            pct_color = YELLOW if percent < 0.5 else GREEN
             print(f"\r[{bar}] {pct_color}{percent*100:5.1f}%{RESET} | {GREEN}{fetched:>6}{RESET}/{total_estimated:<6} | {RED}配额:{total_quota_used:>6}{RESET} | {msg}", end="", flush=True)
 
         def print_done():
@@ -382,7 +383,7 @@ class FofaClient:
                     range_query = query
 
                 slice_stats = self.search(range_query, size=10000, page=1, fields=fields, full=full)
-                total_quota_used += 10000
+                total_quota_used += len(slice_stats.results)
 
                 if not slice_stats.results:
                     break
