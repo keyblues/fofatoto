@@ -28,7 +28,7 @@ BANNER = r"""
  |_|   \___/|_|/_/   \_\   |_| \___/ |_| \___/ 
                                                
 
-				FOFA Query Tool v1.1.2
+				FOFA Query Tool v1.1.3
         			https://github.com/keyblues/fofatoto
 """
 
@@ -291,7 +291,7 @@ class FofaClient:
                     setattr(result, field, value)
                 else:
                     result._extra[field] = value
-            if "domain" in fields_list and result.host:
+            if "domain" in fields_list and result.host and not result.domain:
                 result.domain = _infer_domain_from_host(result.host)
             results.append(result)
             if result.ip:
@@ -350,7 +350,7 @@ class FofaClient:
             percent = fetched / total_estimated
             filled = int(bar_width * percent)
             bar = f"{GREEN}{'=' * filled}{RESET}{'~' if filled < bar_width else ''}{' ' * (bar_width - filled - 1)}"
-            pct_color = YELLOW if percent < 50 else GREEN
+            pct_color = YELLOW if percent < 0.5 else GREEN
             print(f"\r[{bar}] {pct_color}{percent*100:5.1f}%{RESET} | {GREEN}{fetched:>6}{RESET}/{total_estimated:<6} | {RED}配额:{total_quota_used:>6}{RESET} | {msg}", end="", flush=True)
 
         def print_done():
@@ -555,6 +555,9 @@ def dedup_results(results: list[FofaResult], fields: Optional[str], dedup_field:
     else:
         dedup_fields = user_fields
 
+    if not dedup_fields:
+        return results
+
     seen = set()
     unique_results = []
     for r in results:
@@ -575,10 +578,31 @@ def dedup_results(results: list[FofaResult], fields: Optional[str], dedup_field:
             elif f == "url":
                 key_tuple.append(build_url(r) or "")
         key = tuple(key_tuple)
-        if any(key_tuple) and key not in seen:
+        if not key:
+            unique_results.append(r)
+            continue
+        if key not in seen:
             seen.add(key)
             unique_results.append(r)
     return unique_results
+
+
+def parse_limit_value(limit: str) -> tuple[bool, int]:
+    """解析 limit 参数，返回 (is_max, limit_value)。"""
+    limit_str = str(limit).strip()
+    is_max = limit_str.lower() == "max"
+    if is_max:
+        return True, 0
+
+    try:
+        limit_value = int(limit_str)
+    except ValueError as e:
+        raise ValueError("-l/--limit 必须是正整数或 'max'") from e
+
+    if limit_value <= 0:
+        raise ValueError("-l/--limit 必须大于 0，或使用 'max'")
+
+    return False, limit_value
 
 
 def export_txt(results: list[FofaResult], output_path: Path, fields: Optional[str] = None, dedup_field: Optional[str] = None) -> int:
@@ -691,6 +715,10 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
+    if args.fill <= 0 or args.fill > 1:
+        print("[!] --fill 取值范围必须在 (0, 1]", file=sys.stderr)
+        sys.exit(1)
+
     # 批量查询模式
     if args.batch_file:
         try:
@@ -760,9 +788,7 @@ def main():
     # 执行查询
     results = None
     try:
-        limit_str = str(args.limit)
-        is_max = limit_str.lower() == "max"
-        limit_value = 0 if is_max else int(limit_str)
+        is_max, limit_value = parse_limit_value(args.limit)
 
         if args.verbose:
             print(f"[*] 查询: {args.query}")
@@ -878,9 +904,7 @@ def run_batch_search(client: FofaClient, queries: list[tuple[str, int]], args) -
         print(f"\n{CYAN}[{idx}/{total_queries}] 查询:{RESET} {query}")
 
         try:
-            limit_str = str(args.limit)
-            is_max = limit_str.lower() == "max"
-            limit_value = 0 if is_max else int(limit_str)
+            is_max, limit_value = parse_limit_value(args.limit)
 
             query_fields = args.fields
             if args.dedup:
@@ -931,7 +955,10 @@ def export_results(results, args):
 
     def resolve_output_path(suffix: str) -> Path:
         if len(formats) == 1:
-            return unique_path(output_path)
+            target = output_path
+            if output_path.suffix.lower() != suffix:
+                target = output_path.with_suffix(suffix)
+            return unique_path(target)
         if output_path.suffix:
             target = output_path.with_suffix(suffix)
         else:
