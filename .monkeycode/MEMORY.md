@@ -31,6 +31,13 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
 
 ## 条目
 
+[跟踪 CHANGELOG.md 文件]
+- Date: 2026-04-23
+- Context: 用户要求恢复并持续跟踪发布变更日志文件
+- Instructions:
+  - 不要忽略 `CHANGELOG.md`
+  - 需要保留并更新 `CHANGELOG.md`，记录发布版本变更
+
 [保持在 main 分支工作]
 - Date: 2026-04-23
 - Context: 用户在当前代码修复会话中提出分支使用偏好
