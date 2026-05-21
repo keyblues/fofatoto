@@ -3,3 +3,6 @@
 *.json
 fofa_results*
 fofatoto
+node_modules/
+gan-harness/
+__pycache__/
