@@ -2,6 +2,30 @@
 
 本文件使用发布记录（Releases）风格维护版本变更。
 
+## v1.2.1 - 2026-06-22
+
+### 修复
+- 修复 Web UI 导出任务和临时文件从不清理导致的内存与磁盘泄漏：新增 30 分钟 TTL 自动清理机制（`_cleanup_export_tasks`），过期任务及其临时文件会被自动删除。
+- 修复 `FofaWebHandler.log_message` 实现错误：原本输出 `args[0]` 而非 `format % args`，导致日志内容错误。
+- 修复 `build_url` 中 HTTPS 端口推断仅识别 443 的问题：现在同时覆盖 8443、4443 等常见 HTTPS 端口。
+- 修复 `dedup_results` 中空键元组跳过去重的问题：空键也纳入 `seen` 集合，避免多条全空记录未被去重。
+- 修复 `export_json` 字段过滤顺序导致 JSON schema 不一致的问题：指定字段时保留所有字段（空值输出为空字符串），未指定字段时才过滤空值。
+- 修复 `_handle_search` 未校验 `size` 下界的问题：负值或 0 会传入 FOFA API，现在强制 `max(1, min(size, 10000))`。
+- 修复 `_find_available_port` 全部端口被占用时返回已占用端口的问题：现在抛出明确的 `OSError`。
+- 修复 `before_time` 解析失败时回退为原始字符串可能导致循环的问题：所有解析失败统一设为 `None`。
+
+### 优化
+- 实现 `NUITKA_ONEFILE_PARENT` 环境变量支持：onefile 编译模式下可正确定位用户配置目录，与文档描述一致。
+- 提取 `_merge_dedup_fields` 公共函数，消除 `handle_single_mode` 和 `run_batch_search` 中的重复代码。
+- `FofaResult._extra` 默认值改用 `field(default_factory=dict)`，删除冗余的 `__post_init__`。
+- 删除 `search()` 重试循环中不可达的 `for-else` 死代码及 `last_error` 无用赋值。
+- 非交互环境下进度条降频输出（每 10 批或达目标时才打印），避免日志膨胀。
+- `webbrowser.open` 添加异常处理，无桌面环境时不崩溃。
+
+### 其他
+- 版本号更新：`v1.2.0` -> `v1.2.1`。
+- 完成语法检查与实际查询、深度导出、Web UI 接口回归验证。
+
 ## v1.2.0 - 2026-05-11
 
 ### 新增

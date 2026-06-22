@@ -30,7 +30,7 @@ from urllib.parse import parse_qs, urlparse
 
 # ============ Banner ============
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 GITHUB_URL = "https://github.com/keyblues/fofatoto"
 DEFAULT_CONFIG = {"url": "https://fofa.info", "key": "your-fofa-key-here"}
 DEFAULT_WEB_PORT = 17380
@@ -454,7 +454,10 @@ class ConfigManager:
         self.last_error = ""
 
     def _get_config_dir(self) -> Path:
-        """获取配置目录：源码运行取脚本目录，onefile 运行取可执行文件目录。"""
+        """获取配置目录：onefile 模式优先用 NUITKA_ONEFILE_PARENT，否则取脚本/可执行文件目录。"""
+        onefile_parent = os.environ.get("NUITKA_ONEFILE_PARENT")
+        if onefile_parent:
+            return Path(onefile_parent).resolve()
         entry = Path(sys.argv[0] if sys.argv and sys.argv[0] else __file__).resolve()
         return entry.parent
 
@@ -540,10 +543,7 @@ class FofaResult:
     country_name: str = ""
     base_protocol: str = ""
     link: str = ""
-    _extra: dict = None
-
-    def __post_init__(self):
-        self._extra = {}
+    _extra: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         result = asdict(self)
@@ -690,14 +690,12 @@ class FofaClient:
         if full:
             url += "&full=true"
 
-        last_error = None
         data = None
         for attempt in range(1, max_retries + 1):
             try:
                 resp = urllib.request.urlopen(url, timeout=45)
                 data = json.loads(resp.read().decode())
             except Exception as e:
-                last_error = e
                 if attempt >= max_retries:
                     err_msg = str(e).replace(self.key, "***") if self.key else str(e)
                     raise FofaAPIError(f"请求失败: {err_msg}")
@@ -709,7 +707,6 @@ class FofaClient:
             if data.get("error"):
                 errmsg = data.get("errmsg", "未知错误")
                 api_error = FofaAPIError(f"API 错误: {errmsg}")
-                last_error = api_error
                 if attempt < max_retries and _is_retryable_api_error(errmsg):
                     if retry_callback:
                         retry_callback(attempt, max_retries, api_error)
@@ -718,13 +715,6 @@ class FofaClient:
                 raise api_error
 
             break
-        else:
-            err_msg = (
-                str(last_error).replace(self.key, "***")
-                if self.key
-                else str(last_error)
-            )
-            raise FofaAPIError(f"请求失败: {err_msg}")
 
         results = []
         fields_list = (
@@ -1013,10 +1003,8 @@ class FofaClient:
                         dt = datetime.strptime(batch_min_time, "%Y-%m-%d %H:%M:%S")
                         dt -= timedelta(seconds=1)
                         before_time = dt.strftime("%Y-%m-%d %H:%M:%S")
-                    except ValueError:
+                    except (ValueError, TypeError):
                         before_time = None
-                    except Exception:
-                        before_time = batch_min_time
                 else:
                     break
 
@@ -1071,7 +1059,9 @@ def build_url(r: FofaResult) -> str:
         host_has_port = False
 
     protocol = (
-        r.protocol.lower() if r.protocol else ("https" if r.port == "443" else "http")
+        r.protocol.lower()
+        if r.protocol
+        else ("https" if r.port in ("443", "8443", "4443") else "http")
     )
     # 处理协议字段中的脏数据，例如 "http,https" 或 "socks5"
     if "," in protocol:
@@ -1136,9 +1126,6 @@ def dedup_results(
             elif f == "url":
                 key_tuple.append(build_url(r) or "")
         key = tuple(key_tuple)
-        if not key:
-            unique_results.append(r)
-            continue
         if key not in seen:
             seen.add(key)
             unique_results.append(r)
@@ -1246,11 +1233,10 @@ class Exporter:
         processed_data = []
 
         for d in data:
-            # 过滤空值
-            d = {k: v for k, v in d.items() if v != "" and v is not None}
-            # 如果指定了字段，仅保留指定的字段
             if self.requested_fields:
-                d = {k: d[k] for k in self.requested_fields if k in d}
+                d = {k: d.get(k, "") for k in self.requested_fields}
+            else:
+                d = {k: v for k, v in d.items() if v != "" and v is not None}
             processed_data.append(d)
 
         output_path.write_text(
@@ -1292,6 +1278,19 @@ class Exporter:
                         count += 1
 
         return count
+
+
+def _merge_dedup_fields(fields: str, dedup: Optional[str]) -> str:
+    """将去重字段中缺失的字段追加到查询字段列表"""
+    if not dedup:
+        return fields
+    fields = fields or ""
+    dedup_fields = set(f.strip() for f in dedup.split(",") if f.strip())
+    user_fields = set(f.strip() for f in fields.split(",") if f.strip())
+    extra_fields = dedup_fields - user_fields
+    if extra_fields:
+        return (fields + "," if fields else "") + ",".join(extra_fields)
+    return fields
 
 
 def parse_limit_value(limit: str) -> tuple[bool, int]:
@@ -1383,7 +1382,7 @@ def create_console_progress_callback(bar_width=25):
             if INTERACTIVE_OUTPUT:
                 print(f"\r{line}", end="", flush=True)
                 progress_active = True
-            else:
+            elif batch_num % 10 == 0 or fetched >= target_count:
                 print(line)
 
         elif event == "target_reached":
@@ -1615,15 +1614,7 @@ def handle_single_mode(client: FofaClient, args):
             print(f"[*] 查询: {args.query}")
             print(f"[*] 数量限制: {'无限制(max)' if is_max else limit_value}")
 
-        query_fields = args.fields
-        if args.dedup:
-            dedup_fields = set(f.strip() for f in args.dedup.split(",") if f.strip())
-            user_fields = set(
-                f.strip() for f in (args.fields or "").split(",") if f.strip()
-            )
-            extra_fields = dedup_fields - user_fields
-            if extra_fields:
-                query_fields = args.fields + "," + ",".join(extra_fields)
+        query_fields = _merge_dedup_fields(args.fields, args.dedup)
 
         if limit_value > 10000 or is_max:
             max_size = 0 if is_max else limit_value
@@ -1666,6 +1657,24 @@ def handle_single_mode(client: FofaClient, args):
 
 _export_tasks: dict = {}
 _export_lock = threading.Lock()
+_EXPORT_TASK_TTL = 1800  # 30 分钟后自动清理已完成任务
+
+
+def _cleanup_export_tasks():
+    """清理过期的导出任务及其临时文件，防止内存和磁盘泄漏"""
+    now = time.time()
+    expired = []
+    with _export_lock:
+        for tid, task in list(_export_tasks.items()):
+            if task.status in ("done", "error") and (now - task.created_at) > _EXPORT_TASK_TTL:
+                expired.append((tid, dict(task.output_files)))
+                del _export_tasks[tid]
+    for tid, files in expired:
+        for filepath in files.values():
+            try:
+                Path(filepath).unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 @dataclass
@@ -1832,7 +1841,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
     config_manager: Optional[ConfigManager] = None
 
     def log_message(self, format, *args):
-        sys.stderr.write(f"[web] {args[0]}\n")
+        sys.stderr.write(f"[web] {format % args}\n")
 
     def _send_json(self, data: dict, status: int = 200):
         self.send_response(status)
@@ -1955,7 +1964,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             full = body.get("full", False)
 
             stats = self.client.search(
-                query, size=min(size, 10000), fields=fields, full=full
+                query, size=max(1, min(size, 10000)), fields=fields, full=full
             )
 
             columns = [f.strip() for f in fields.split(",") if f.strip()]
@@ -2001,6 +2010,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             task_id = uuid.uuid4().hex[:12]
             task = ExportTask(task_id=task_id, kind="export")
 
+            _cleanup_export_tasks()
             with _export_lock:
                 _export_tasks[task_id] = task
 
@@ -2169,6 +2179,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                 target_count=len(queries),
             )
 
+            _cleanup_export_tasks()
             with _export_lock:
                 _export_tasks[task_id] = task
 
@@ -2297,7 +2308,9 @@ def _find_available_port(
                 return port
         except OSError:
             continue
-    return start_port
+    raise OSError(
+        f"未找到可用端口（尝试 {start_port}-{start_port + max_attempts - 1}）"
+    )
 
 
 class FofaWebServer:
@@ -2327,7 +2340,10 @@ class FofaWebServer:
         print(f"\n{GREEN}[*] Web UI 已启动: {CYAN}http://127.0.0.1:{self.port}{RESET}")
         print(f"[*] 按 {RED}Ctrl+C{RESET} 停止服务器\n")
 
-        webbrowser.open(f"http://127.0.0.1:{self.port}")
+        try:
+            webbrowser.open(f"http://127.0.0.1:{self.port}")
+        except Exception:
+            pass
 
         try:
             self.httpd.serve_forever()
@@ -2471,17 +2487,7 @@ def run_batch_search(
         try:
             is_max, limit_value = parse_limit_value(args.limit)
 
-            query_fields = args.fields
-            if args.dedup:
-                dedup_fields = set(
-                    f.strip() for f in args.dedup.split(",") if f.strip()
-                )
-                user_fields = set(
-                    f.strip() for f in (args.fields or "").split(",") if f.strip()
-                )
-                extra_fields = dedup_fields - user_fields
-                if extra_fields:
-                    query_fields = args.fields + "," + ",".join(extra_fields)
+            query_fields = _merge_dedup_fields(args.fields, args.dedup)
 
             if limit_value > 10000 or is_max:
                 max_size = 0 if is_max else limit_value
