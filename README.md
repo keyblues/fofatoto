@@ -75,6 +75,9 @@ Web UI 提供三种模式：
 | 深度导出 | 后台按 `before` 时间游标分批导出，页面显示进度，完成后下载 CSV / JSON / TXT |
 | 批量模式 | 使用占位符批量替换目标，逐个查询并合并导出 |
 
+<img width="2160" height="1247" alt="image" src="https://github.com/user-attachments/assets/f2c4cd6a-c1f0-42ae-b165-5c33501339f7" />
+
+
 ### 基本用法
 
 ```bash
