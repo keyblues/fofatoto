@@ -6,6 +6,7 @@
 ## v1.2.1 - 2026-06-23
 
 ### 修复
+- 修复 Nuitka onefile 模式下配置文件被写入 PID 临时解压子目录（如 `8968\config.json`）、进程退出即丢失的问题：`_get_config_dir` 识别 onefile 临时子目录（父目录名为纯数字 PID 且上一级存在同名可执行文件）并回退到原始 exe 所在目录。
 - 修复 Web UI 导出任务和临时文件从不清理导致的内存与磁盘泄漏：新增 30 分钟 TTL 自动清理机制（`_cleanup_export_tasks`），过期任务及其临时文件会被自动删除。
 - 修复 `FofaWebHandler.log_message` 实现错误：原本输出 `args[0]` 而非 `format % args`，导致日志内容错误。
 - 修复 `build_url` 中 HTTPS 端口推断仅识别 443 的问题：现在同时覆盖 8443、4443 等常见 HTTPS 端口。

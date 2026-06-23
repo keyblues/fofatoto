@@ -30,7 +30,7 @@ from urllib.parse import parse_qs, urlparse
 
 # ============ Banner ============
 
-APP_VERSION = "1.2.2"
+APP_VERSION = "1.2.1"
 GITHUB_URL = "https://github.com/keyblues/fofatoto"
 DEFAULT_CONFIG = {"url": "https://fofa.info", "key": "your-fofa-key-here"}
 DEFAULT_WEB_PORT = 17380
@@ -454,12 +454,22 @@ class ConfigManager:
         self.last_error = ""
 
     def _get_config_dir(self) -> Path:
-        """获取配置目录：onefile 模式优先用 NUITKA_ONEFILE_PARENT，否则取脚本/可执行文件目录。"""
+        """获取配置目录：onefile 模式优先用 NUITKA_ONEFILE_PARENT，否则取脚本/可执行文件目录。
+
+        Nuitka onefile 运行时会把依赖解压到一个 PID 命名的临时子目录，并在其中启动
+        子 exe，此时 sys.argv[0] 指向临时子 exe 而非用户运行的原始 exe，配置文件会
+        被写入临时目录、进程退出即丢失。这里通过路径特征识别该情况并回退到上一级
+        （原始 exe 所在目录）。
+        """
         onefile_parent = os.environ.get("NUITKA_ONEFILE_PARENT")
         if onefile_parent:
             return Path(onefile_parent).resolve()
         entry = Path(sys.argv[0] if sys.argv and sys.argv[0] else __file__).resolve()
-        return entry.parent
+        parent = entry.parent
+        # onefile 临时子目录特征：父目录名为纯数字 PID，且上一级目录存在同名 exe。
+        if parent.name.isdigit() and (parent.parent / entry.name).exists():
+            return parent.parent
+        return parent
 
     def ensure_exists(self) -> bool:
         """检测配置文件是否存在，如不存在则自动生成默认配置文件"""
