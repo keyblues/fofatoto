@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install dependencies
-        run: pip install nuitka==4.0.8 zstandard
+        run: pip install nuitka zstandard
 
       - name: Build
         run: python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_site,no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --noinclude-IPython-mode=nofollow --noinclude-dask-mode=nofollow --noinclude-numba-mode=nofollow --noinclude-default-mode=nofollow --output-dir=dist --output-filename=fofatoto.exe fofatoto.py
@@ -50,7 +50,7 @@ jobs:
             > /dev/null 2>&1 && rm -rf /var/lib/apt/lists/*
 
       - name: Install nuitka
-        run: pip3 install --break-system-packages nuitka==4.0.8 zstandard
+        run: pip3 install --break-system-packages nuitka zstandard
 
       - name: Build
         run: python3 -m nuitka --onefile --lto=yes --static-libpython=yes --remove-output --assume-yes-for-downloads --python-flag=no_site,no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --noinclude-IPython-mode=nofollow --noinclude-dask-mode=nofollow --noinclude-numba-mode=nofollow --noinclude-default-mode=nofollow --output-dir=dist --output-filename=fofatoto fofatoto.py
@@ -80,7 +80,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install dependencies
-        run: pip install nuitka==4.0.8 zstandard
+        run: pip install nuitka zstandard
 
       - name: Build
         run: python -m nuitka --onefile --lto=yes --static-libpython=yes --remove-output --assume-yes-for-downloads --python-flag=no_site,no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --noinclude-IPython-mode=nofollow --noinclude-dask-mode=nofollow --noinclude-numba-mode=nofollow --noinclude-default-mode=nofollow --output-dir=dist --output-filename=fofatoto fofatoto.py
