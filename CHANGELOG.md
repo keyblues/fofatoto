@@ -6,7 +6,7 @@
 ## v1.2.1 - 2026-06-23
 
 ### 修复
-- 修复 Nuitka onefile 模式下配置文件被写入 PID 临时解压子目录（如 `8968\config.json`）、进程退出即丢失的问题：`_get_config_dir` 识别 onefile 临时子目录（父目录名为纯数字 PID 且上一级存在同名可执行文件）并回退到原始 exe 所在目录。
+- 修复 Nuitka onefile 模式下配置文件被写入 PID 子目录（如 `8968\config.json`）、进程退出即丢失的问题。根因：`_get_config_dir` 误用 Nuitka 内部环境变量 `NUITKA_ONEFILE_PARENT`（其值为进程 PID，并非路径），`Path(<PID>).resolve()` 被解析为当前工作目录下的 PID 子目录。现改用 bootstrap 注入的 `NUITKA_ONEFILE_DIRECTORY`（原始可执行文件所在目录）定位配置目录。
 - 修复 Web UI 导出任务和临时文件从不清理导致的内存与磁盘泄漏：新增 30 分钟 TTL 自动清理机制（`_cleanup_export_tasks`），过期任务及其临时文件会被自动删除。
 - 修复 `FofaWebHandler.log_message` 实现错误：原本输出 `args[0]` 而非 `format % args`，导致日志内容错误。
 - 修复 `build_url` 中 HTTPS 端口推断仅识别 443 的问题：现在同时覆盖 8443、4443 等常见 HTTPS 端口。
@@ -17,7 +17,6 @@
 - 修复 `before_time` 解析失败时回退为原始字符串可能导致循环的问题：所有解析失败统一设为 `None`。
 
 ### 优化
-- 实现 `NUITKA_ONEFILE_PARENT` 环境变量支持：onefile 编译模式下可正确定位用户配置目录，与文档描述一致。
 - 提取 `_merge_dedup_fields` 公共函数，消除 `handle_single_mode` 和 `run_batch_search` 中的重复代码。
 - `FofaResult._extra` 默认值改用 `field(default_factory=dict)`，删除冗余的 `__post_init__`。
 - 删除 `search()` 重试循环中不可达的 `for-else` 死代码及 `last_error` 无用赋值。

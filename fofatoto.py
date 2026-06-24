@@ -454,22 +454,22 @@ class ConfigManager:
         self.last_error = ""
 
     def _get_config_dir(self) -> Path:
-        """获取配置目录：onefile 模式优先用 NUITKA_ONEFILE_PARENT，否则取脚本/可执行文件目录。
+        """获取配置目录。
 
-        Nuitka onefile 运行时会把依赖解压到一个 PID 命名的临时子目录，并在其中启动
-        子 exe，此时 sys.argv[0] 指向临时子 exe 而非用户运行的原始 exe，配置文件会
-        被写入临时目录、进程退出即丢失。这里通过路径特征识别该情况并回退到上一级
-        （原始 exe 所在目录）。
+        Nuitka onefile 模式下，bootstrap 在子进程环境注入 `NUITKA_ONEFILE_DIRECTORY`，
+        指向用户运行的原始可执行文件所在目录（解压出的临时目录不可用作配置目录，
+        进程退出即清理）。优先使用它；普通 Python 脚本模式回退到 sys.argv[0]/__file__。
+
+        注意：`NUITKA_ONEFILE_PARENT` 是 Nuitka 内部的进程 PID 标识
+        （`GetCurrentProcessId()`/`getpid()`），不是路径，不可用作配置目录——
+        v1.2.1 曾误用导致 config 被写入 `CWD\\<PID>\\config.json` 后丢失。
         """
-        onefile_parent = os.environ.get("NUITKA_ONEFILE_PARENT")
-        if onefile_parent:
-            return Path(onefile_parent).resolve()
+        onefile_directory = os.environ.get("NUITKA_ONEFILE_DIRECTORY")
+        if onefile_directory:
+            return Path(onefile_directory).resolve()
+
         entry = Path(sys.argv[0] if sys.argv and sys.argv[0] else __file__).resolve()
-        parent = entry.parent
-        # onefile 临时子目录特征：父目录名为纯数字 PID，且上一级目录存在同名 exe。
-        if parent.name.isdigit() and (parent.parent / entry.name).exists():
-            return parent.parent
-        return parent
+        return entry.parent
 
     def ensure_exists(self) -> bool:
         """检测配置文件是否存在，如不存在则自动生成默认配置文件"""

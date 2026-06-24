@@ -6,3 +6,5 @@ fofatoto
 node_modules/
 gan-harness/
 __pycache__/
+.venv/
+.nv/

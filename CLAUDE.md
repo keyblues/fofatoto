@@ -15,8 +15,8 @@ python3 -m py_compile fofatoto.py
 # Run locally
 python fofatoto.py "domain=baidu.com" -l 10
 
-# Run with custom config
-NUITKA_ONEFILE_PARENT=/path/to/config_dir python fofatoto.py "domain=baidu.com"
+# config.json lives next to the script/executable; in Nuitka onefile mode it is
+# auto-located next to the original exe (via NUITKA_ONEFILE_DIRECTORY), no setup needed.
 
 # Build binaries (requires nuitka, zstandard; Linux needs patchelf + python3-dev)
 python3 -m nuitka --onefile --lto=yes --static-libpython=yes --remove-output \
@@ -36,7 +36,7 @@ The entire tool is in `fofatoto.py`. There is no package structure — it's desi
 
 | Section | Lines | Purpose |
 |---------|-------|---------|
-| Config + `get_config_dir()` | 49–119 | Loads `config.json`; Nuitka onefile-aware path resolution via `NUITKA_ONEFILE_PARENT` env var |
+| Config + `get_config_dir()` | 49–119 | Loads `config.json`; Nuitka onefile-aware path resolution via `NUITKA_ONEFILE_DIRECTORY` env var |
 | `FofaResult` dataclass | 124–169 | Maps all 25+ FOFA fields; `_extra` dict captures unknown API fields |
 | `FofaClient` | - | Two modes: `search()` for single-request queries (≤10000) and `search_all_efficient()` for deep export using a `before` time-cursor strategy |
 | Export functions | 456–643 | `export_csv`, `export_json`, `export_txt` — each handles dedup, field filtering, and URL construction |
@@ -48,7 +48,7 @@ The entire tool is in `fofatoto.py`. There is no package structure — it's desi
 3. Deduplicate by host across batches
 4. Stop when a batch returns <10000 results or target fill percentage is reached
 
-**`config.json` location**: Same directory as the script/executable. In Nuitka onefile mode, set `NUITKA_ONEFILE_PARENT` to point at the config directory.
+**`config.json` location**: Same directory as the script/executable. In Nuitka onefile mode it is auto-located next to the original executable via `NUITKA_ONEFILE_DIRECTORY` (no manual setup needed).
 
 ## Branch and changelog rules
 
