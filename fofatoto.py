@@ -30,7 +30,7 @@ from urllib.parse import parse_qs, urlparse
 
 # ============ Banner ============
 
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.3.0"
 GITHUB_URL = "https://github.com/keyblues/fofatoto"
 DEFAULT_CONFIG = {"url": "https://fofa.info", "key": "your-fofa-key-here"}
 DEFAULT_WEB_PORT = 17380
@@ -148,7 +148,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Micr
 .options-row{display:flex;gap:16px;align-items:center;margin-top:12px;flex-wrap:wrap}
 .options-row label{font-size:12px;color:var(--text-secondary);font-weight:600}
 .options-row select,.options-row input[type=number]{padding:4px 8px;font-size:12px;border:1px solid var(--border);border-radius:2px;background:#fafbfc;margin-left:4px;transition:all 0.15s ease}
-.options-row select:focus,.options-row input[type=number]:focus{border-color:var(--accent);background:#fff;outline:none}
+.options-row select{-webkit-appearance:none;-moz-appearance:none;appearance:none;padding:4px 24px 4px 8px;font-size:11px;font-weight:600;color:var(--text-secondary);cursor:pointer;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 4l3 3 3-3' fill='none' stroke='%2364748b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");background-repeat:no-repeat;background-position:right 6px center;background-color:var(--card-bg)}
+.options-row select:hover{border-color:var(--accent);color:var(--accent)}
+.options-row select:focus,.options-row input[type=number]:focus{border-color:var(--accent);background-color:#fff;outline:none}
+.options-row select:focus{background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 4l3 3 3-3' fill='none' stroke='%233182ce' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>")}
 .options-row input[type=number]{width:80px}
 .options-row input[type=text]{padding:4px 8px;font-size:12px;border:1px solid var(--border);border-radius:2px;background:#fafbfc;margin-left:4px;transition:all 0.15s ease}
 .options-row input[type=text]:focus{border-color:var(--accent);background:#fff;outline:none}
@@ -173,6 +176,17 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Micr
 .stat-value{font-weight:700;color:var(--text)}
 .mini-btn{padding:4px 8px;font-size:11px;font-weight:600;border:1px solid var(--border);border-radius:2px;background:var(--card-bg);color:var(--text-secondary);cursor:pointer;transition:all 0.15s ease}
 .mini-btn:hover{border-color:var(--accent);color:var(--accent);background:#eff6ff}
+.mini-btn.pick-active{border-color:var(--warning);color:var(--warning);background:#fffbeb}
+#resultsTable.picking td{cursor:crosshair}
+#resultsTable.picking td:hover{background:#fffbeb;outline:1px solid var(--warning);box-shadow:inset 0 0 0 1px var(--warning)}
+.settings-wrap{position:relative}
+.settings-popup{display:none;position:absolute;top:100%;right:0;margin-top:4px;background:var(--card-bg);border:1px solid var(--border);border-radius:2px;padding:10px 12px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.08);min-width:180px}
+.settings-popup.show{display:block}
+.settings-popup label{display:flex;align-items:center;gap:6px;padding:4px 0;font-size:12px;cursor:pointer;white-space:nowrap}
+.exc-chips{display:inline-flex;gap:4px;flex-wrap:wrap;align-items:center}
+.exc-chip{display:inline-flex;align-items:center;gap:3px;padding:2px 6px;font-size:11px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:2px;white-space:nowrap}
+.exc-chip .exc-x{cursor:pointer;font-weight:700;color:#dc2626;opacity:.7}
+.exc-chip .exc-x:hover{opacity:1}
 .server-status{font-weight:700}
 .server-status.ok{color:var(--success)}
 .server-status.fail{color:var(--danger)}
@@ -302,6 +316,8 @@ td{max-width:240px}
 </div>
 <div class="options-row" id="instantOptions">
 <label>数量:<select id="instantSize"><option value="10">10</option><option value="20">20</option><option value="50">50</option><option value="100" selected>100</option><option value="200">200</option><option value="500">500</option><option value="1000">1000</option><option value="2000">2000</option><option value="5000">5000</option><option value="10000">10000</option></select></label>
+<span class="exc-chips" id="exclusionChips"></span>
+<div class="settings-wrap"><button class="mini-btn" onclick="toggleSettings(event)">设置</button><div class="settings-popup" id="settingsPopup"><label><input type="checkbox" id="instantFull"> 全部数据</label><label><input type="checkbox" id="instantAutoQuery"> 选取查询后自动搜索</label></div></div>
 </div>
 <div class="options-row" id="exportOptions" style="display:none">
 <label>覆盖率:<input type="number" id="exportFill" value="0.8" min="0.1" max="1.0" step="0.1"></label>
@@ -344,6 +360,17 @@ td{max-width:240px}
 <div id="progressActions"><button class="btn btn-secondary" onclick="cancelExport()">取消</button></div>
 </div>
 </div>
+<div class="overlay" id="cancelOverlay">
+<div class="overlay-content" style="text-align:center">
+<h3>确认取消</h3>
+<p style="font-size:13px;color:var(--text-secondary);margin:0 0 24px;line-height:1.7">已查询到的数据是否保留？<br>保留后可继续下载 CSV / JSON / TXT 文件。</p>
+<div style="display:flex;gap:8px;justify-content:center">
+<button class="btn btn-primary" onclick="confirmCancel(1)">保存并取消</button>
+<button class="btn btn-danger" onclick="confirmCancel(0)">直接取消</button>
+<button class="btn btn-secondary" onclick="hideCancelConfirm()">返回</button>
+</div>
+</div>
+</div>
 <script>
 var fieldCategories=[
 {name:"核心",fields:["host","ip","port","protocol","domain"]},
@@ -369,7 +396,7 @@ document.addEventListener("DOMContentLoaded",function(){initFieldSelector();load
 function setupModeTabs(){document.querySelectorAll(".mode-tab").forEach(function(t){t.addEventListener("click",function(){switchMode(this.dataset.mode)})})}
 function modeButtonText(){return currentMode==="instant"?"搜索":(currentMode==="export"?"导出":"批量查询")}
 function refreshModeButton(){var btn=document.getElementById("searchBtn");btn.textContent=modeButtonText();btn.className="btn btn-primary"}
-function switchMode(mode){currentMode=mode;document.querySelectorAll(".mode-tab").forEach(function(t){t.classList.toggle("active",t.dataset.mode===mode)});document.getElementById("instantOptions").style.display=mode==="instant"?"":"none";document.getElementById("exportOptions").style.display=mode==="export"?"":"none";document.getElementById("batchOptions").style.display=mode==="batch"?"":"none";if(!document.getElementById("searchBtn").disabled)refreshModeButton();clearMessage();updateLayout();document.getElementById("queryInput").focus()}
+function switchMode(mode){if(exportPollTimer&&currentMode!==mode){showMessage("error","已有导出任务正在运行，请先取消或等待完成");return}currentMode=mode;document.querySelectorAll(".mode-tab").forEach(function(t){t.classList.toggle("active",t.dataset.mode===mode)});document.getElementById("instantOptions").style.display=mode==="instant"?"":"none";document.getElementById("exportOptions").style.display=mode==="export"?"":"none";document.getElementById("batchOptions").style.display=mode==="batch"?"":"none";if(!document.getElementById("searchBtn").disabled)refreshModeButton();clearMessage();updateLayout();document.getElementById("queryInput").focus()}
 function syncModeContent(){var results=document.getElementById("resultsArea"),panel=document.getElementById("exportPanel");if(results)results.style.display=currentMode==="instant"&&previewRendered?"block":"none";if(panel)panel.style.display=currentMode==="export"&&panel.classList.contains("show")?"":"none"}
 function setupSearchShortcut(){var input=document.getElementById("queryInput");input.addEventListener("focus",function(){renderHistorySuggestions(true)});input.addEventListener("input",function(){renderHistorySuggestions(false)});input.addEventListener("keydown",function(e){var dd=document.getElementById("historyDropdown"),open=dd&&dd.classList.contains("show");if(e.key==="ArrowDown"){e.preventDefault();if(!open)renderHistorySuggestions(true);moveHistorySelection(1)}else if(e.key==="ArrowUp"){e.preventDefault();if(!open)renderHistorySuggestions(true);moveHistorySelection(-1)}else if(e.key==="Escape"){closeHistorySuggestions()}else if(e.key==="Enter"){if(open&&historyActiveIndex>-1&&pickActiveHistory()){e.preventDefault();return}closeHistorySuggestions();executeSearch()}})}
 function showConfigNotice(d){var box=document.getElementById("configAlert");document.getElementById("configAlertTitle").textContent="未配置有效的 FOFA API Key";document.getElementById("configAlertText").textContent="请编辑下方配置文件，保存后刷新本页面。";document.getElementById("configPath").textContent=d.config_path||"";document.getElementById("configTemplate").textContent=d.config_template||"";box.classList.add("show")}
@@ -377,23 +404,26 @@ function hideConfigNotice(){document.getElementById("configAlert").classList.rem
 function formatApiError(data,fallback){var msg=(data&&data.error)||fallback||"请求失败";if(data&&data.data&&data.data.configured===false&&data.data.config_path){msg+="。配置文件: "+data.data.config_path}return msg}
 function loadAccountInfo(){fetch("/api/info").then(function(r){return r.json()}).then(function(data){var d=data.data||{};if(d.configured===false){showConfigNotice(d);document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">未配置</span> 等待 API Key';return}hideConfigNotice();if(data.success){var vipClass=d.isvip?"active":"inactive",vipText=d.isvip?"VIP "+(d.vip_level||""):"未激活",serverText=d.server_ok?"正常":"异常",serverClass=d.server_ok?"ok":"fail";document.getElementById("accountInfo").innerHTML='<span class="vip-badge '+vipClass+'">'+vipText+'</span> 服务器: <span class="server-status '+serverClass+'">'+serverText+'</span> | 剩余查询: <strong>'+(d.remain_api_query||"N/A")+"</strong> | 过期: "+(d.expiration||"N/A");if(d.server_ok===false&&d.error)showMessage("error",d.error)}else{document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 账户信息不可用';showMessage("error",formatApiError(data,"账户信息不可用"))}}).catch(function(e){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 本地服务不可用';showMessage("error","网络错误: "+e.message)}).finally(function(){updateLayout()})}
 function executeSearch(){var q=document.getElementById("queryInput").value.trim();if(!q)return;closeHistorySuggestions();addToHistory(q);if(currentMode==="instant")doInstantSearch(q);else if(currentMode==="export")doDeepExport(q);else doBatchSearch(q)}
-function doInstantSearch(query){var size=parseInt(document.getElementById("instantSize").value)||100,fields=getSelectedFields();clearResults();showMessage("info","搜索中...");fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:query,size:size,fields:fields,full:false})}).then(function(r){return r.json()}).then(function(data){clearMessage();if(data.success){currentResults=data.data.results||[];currentColumns=data.data.columns||[];renderResults(data.data)}else showMessage("error",formatApiError(data,"搜索失败"))}).catch(function(e){showMessage("error","网络错误: "+e.message)})}
+function doInstantSearch(query){var size=parseInt(document.getElementById("instantSize").value)||100,fields=getSelectedFields(),full=document.getElementById("instantFull").checked;clearResults();showMessage("info","搜索中...");fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:query,size:size,fields:fields,full:full})}).then(function(r){return r.json()}).then(function(data){clearMessage();if(data.success){currentResults=data.data.results||[];currentColumns=data.data.columns||[];renderResults(data.data)}else showMessage("error",formatApiError(data,"搜索失败"))}).catch(function(e){showMessage("error","网络错误: "+e.message)})}
 function doDeepExport(query){var fill=parseFloat(document.getElementById("exportFill").value),maxSize=parseInt(document.getElementById("exportMaxSize").value)||0,fields=getSelectedFields(),full=document.getElementById("exportFull").checked;if(isNaN(fill))fill=0.8;if(fill<=0||fill>1){showMessage("error","覆盖率必须在 0 到 1 之间");return}if(maxSize<0){showMessage("error","上限不能小于 0");return}if(exportPollTimer){showMessage("error","已有导出任务正在运行，请先取消或等待完成");return}progressUiMode="panel";exportTaskId=null;clearMessage();showExportPanelStart(query,fill,maxSize,full);setSearchBusy(true,"导出中...");fetch("/api/export",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:query,fill_percent:fill,max_size:maxSize,fields:fields,full:full})}).then(function(r){return r.json()}).then(function(data){if(data.success){exportTaskId=data.task_id;pollProgress()}else{setSearchBusy(false);showExportPanelError(formatApiError(data,"导出失败"))}}).catch(function(e){setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})}
-function doBatchSearch(baseQuery){var ph=document.getElementById("batchPlaceholder").value||"{}",targets=document.getElementById("batchTargets").value.trim(),fill=parseFloat(document.getElementById("batchFill").value)||0.8,fields=getSelectedFields();if(!targets){showMessage("error","请输入批量目标");return}if(baseQuery.indexOf(ph)===-1){showMessage("error","基础查询必须包含占位符: "+ph);return}var targetLines=targets.replace(/\r/g,"").split("\n").filter(function(l){return l.trim()});progressUiMode="overlay";showOverlay("批量导出进行中");fetch("/api/batch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({base_query:baseQuery,targets:targetLines,placeholder:ph,fill_percent:fill,fields:fields})}).then(function(r){return r.json()}).then(function(data){if(data.success){exportTaskId=data.task_id;pollProgress()}else{hideOverlay();showMessage("error",formatApiError(data,"批量导出失败"))}}).catch(function(e){hideOverlay();showMessage("error","网络错误: "+e.message)})}
+function doBatchSearch(baseQuery){var ph=document.getElementById("batchPlaceholder").value||"{}",targets=document.getElementById("batchTargets").value.trim(),fill=parseFloat(document.getElementById("batchFill").value)||0.8,fields=getSelectedFields();if(!targets){showMessage("error","请输入批量目标");return}if(baseQuery.indexOf(ph)===-1){showMessage("error","基础查询必须包含占位符: "+ph);return}if(exportPollTimer){showMessage("error","已有任务正在运行，请先取消或等待完成");return}var targetLines=targets.replace(/\r/g,"").split("\n").filter(function(l){return l.trim()});progressUiMode="panel";exportTaskId=null;clearMessage();showBatchPanelStart(baseQuery,targetLines.length,ph,fill);setSearchBusy(true,"批量查询中...");fetch("/api/batch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({base_query:baseQuery,targets:targetLines,placeholder:ph,fill_percent:fill,fields:fields})}).then(function(r){return r.json()}).then(function(data){if(data.success){exportTaskId=data.task_id;pollProgress()}else{setSearchBusy(false);showExportPanelError(formatApiError(data,"批量导出失败"))}}).catch(function(e){setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})}
 function renderProgressDetails(d,pct){if(d.kind==="batch"){var current=d.current_target||0,total=d.total_targets||0,curFetched=d.current_fetched||0,curTotal=d.current_target_count||d.current_total_estimated||0;return "进度: <span>"+pct+"%</span><br>目标: <span>"+current+"</span> / "+total+" | 当前: <span>"+curFetched.toLocaleString()+"</span> / ~"+curTotal.toLocaleString()+"<br>累计结果: <span>"+(d.fetched||0).toLocaleString()+"</span> | 失败: <span>"+(d.failed_count||0).toLocaleString()+"</span>"}var target=d.target_count||d.total_estimated||0;return "进度: <span>"+pct+"%</span><br>已获取: <span>"+(d.fetched||0).toLocaleString()+"</span> / ~"+target.toLocaleString()+"<br>总匹配: <span>"+(d.total_estimated||0).toLocaleString()+"</span> | 独立IP: <span>"+(d.unique_ips||0).toLocaleString()+"</span> | 配额: <span>"+(d.total_quota_used||0).toLocaleString()+"</span>"}
 function exportMetaItem(label,value){return '<div class="export-meta-item"><span class="export-meta-label">'+escHtml(label)+'</span><span class="export-meta-value">'+escHtml(value)+'</span></div>'}
 function exportTarget(d){return d.target_count||d.total_estimated||0}
 function showExportPanelStart(query,fill,maxSize,full){document.getElementById("exportPanel").classList.add("show");document.getElementById("exportPanelTitle").textContent="深度导出";document.getElementById("exportPanelState").textContent="启动中";document.getElementById("exportPanelFill").style.width="0%";document.getElementById("exportPanelMessage").textContent="正在创建导出任务，完成后可下载 CSV / JSON / TXT。";document.getElementById("exportPanelMeta").innerHTML=exportMetaItem("查询",query)+exportMetaItem("覆盖率",Math.round(fill*100)+"%")+exportMetaItem("上限",maxSize>0?maxSize.toLocaleString():"不限制")+exportMetaItem("数据范围",full?"全部数据":"基础字段");document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-secondary" onclick="cancelExport()">取消</button>';updateLayout()}
+function showBatchPanelStart(baseQuery,targetCount,placeholder,fill){document.getElementById("exportPanel").classList.add("show");document.getElementById("exportPanelTitle").textContent="批量查询";document.getElementById("exportPanelState").textContent="启动中";document.getElementById("exportPanelFill").style.width="0%";document.getElementById("exportPanelMessage").textContent="正在创建批量查询任务，完成后可下载 CSV / JSON / TXT。";document.getElementById("exportPanelMeta").innerHTML=exportMetaItem("基础查询",baseQuery)+exportMetaItem("占位符",placeholder)+exportMetaItem("目标数",targetCount.toLocaleString())+exportMetaItem("覆盖率",Math.round(fill*100)+"%");document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-secondary" onclick="cancelExport()">取消</button>';updateLayout()}
 function showExportPanelError(message){document.getElementById("exportPanel").classList.add("show");document.getElementById("exportPanelState").textContent="失败";document.getElementById("exportPanelMessage").innerHTML='<span style="color:#dc2626">'+escHtml(message)+"</span>";document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-secondary" onclick="hideExportPanel()">关闭</button>';updateLayout()}
-function updateExportPanel(d,pct){var target=exportTarget(d),fetched=d.fetched||0,elapsed=d.elapsed_seconds?d.elapsed_seconds+" 秒":"刚开始";document.getElementById("exportPanel").classList.add("show");document.getElementById("exportPanelFill").style.width=pct+"%";document.getElementById("exportPanelState").textContent=d.status==="done"?(d.partial?"部分完成":"完成"):(d.status==="error"?"失败":pct+"%");document.getElementById("exportPanelMessage").textContent=d.status==="done"?(d.partial?("部分导出完成，已保留 "+fetched.toLocaleString()+" 条可用结果。"):"导出文件已生成，可选择格式下载。"):(d.message||"正在按时间游标分批拉取 FOFA 数据...");document.getElementById("exportPanelMeta").innerHTML=exportMetaItem("已获取",fetched.toLocaleString())+exportMetaItem("目标",target?("~"+target.toLocaleString()):"估算中")+exportMetaItem("总匹配",((d.total_estimated||0).toLocaleString()))+exportMetaItem("独立 IP",((d.unique_ips||0).toLocaleString()))+exportMetaItem("配额",((d.total_quota_used||0).toLocaleString()))+exportMetaItem("耗时",elapsed);if(d.status==="done"){document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-primary" onclick="downloadExport(\'csv\')">下载 CSV</button><button class="btn btn-secondary" onclick="downloadExport(\'json\')">下载 JSON</button><button class="btn btn-secondary" onclick="downloadExport(\'txt\')">下载 TXT</button><button class="btn btn-secondary" onclick="hideExportPanel()">收起</button>'}else if(d.status==="error"){document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-secondary" onclick="hideExportPanel()">关闭</button>';document.getElementById("exportPanelMessage").innerHTML='<span style="color:#dc2626">'+escHtml(d.error||"未知错误")+"</span>"}else{document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-secondary" onclick="cancelExport()">取消</button>'}updateLayout()}
+function updateExportPanel(d,pct){var target=exportTarget(d),fetched=d.fetched||0,elapsed=d.elapsed_seconds?d.elapsed_seconds+" 秒":"刚开始";document.getElementById("exportPanel").classList.add("show");document.getElementById("exportPanelFill").style.width=pct+"%";document.getElementById("exportPanelState").textContent=d.status==="done"?(d.partial?"部分完成":"完成"):(d.status==="error"?"失败":pct+"%");document.getElementById("exportPanelMessage").textContent=d.status==="done"?(d.partial?("部分导出完成，已保留 "+fetched.toLocaleString()+" 条可用结果。"):"导出文件已生成，可选择格式下载。"):(d.message||(d.kind==="batch"?"正在批量查询...":"正在按时间游标分批拉取 FOFA 数据..."));document.getElementById("exportPanelMeta").innerHTML=d.kind==="batch"?exportMetaItem("目标",(d.current_target||0)+" / "+(d.total_targets||0))+exportMetaItem("当前",(d.current_fetched||0).toLocaleString()+" / ~"+(d.current_target_count||d.current_total_estimated||0).toLocaleString())+exportMetaItem("累计",(d.fetched||0).toLocaleString())+exportMetaItem("失败",(d.failed_count||0).toLocaleString())+exportMetaItem("耗时",elapsed):exportMetaItem("已获取",fetched.toLocaleString())+exportMetaItem("目标",target?("~"+target.toLocaleString()):"估算中")+exportMetaItem("总匹配",((d.total_estimated||0).toLocaleString()))+exportMetaItem("独立 IP",((d.unique_ips||0).toLocaleString()))+exportMetaItem("配额",((d.total_quota_used||0).toLocaleString()))+exportMetaItem("耗时",elapsed);if(d.status==="done"){document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-primary" onclick="downloadExport(\'csv\')">下载 CSV</button><button class="btn btn-secondary" onclick="downloadExport(\'json\')">下载 JSON</button><button class="btn btn-secondary" onclick="downloadExport(\'txt\')">下载 TXT</button><button class="btn btn-secondary" onclick="hideExportPanel()">收起</button>'}else if(d.status==="error"){document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-secondary" onclick="hideExportPanel()">关闭</button>';document.getElementById("exportPanelMessage").innerHTML='<span style="color:#dc2626">'+escHtml(d.error||"未知错误")+"</span>"}else{document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-secondary" onclick="cancelExport()">取消</button>'}updateLayout()}
 function hideExportPanel(){document.getElementById("exportPanel").classList.remove("show");updateLayout()}
 function setSearchBusy(busy,label){var btn=document.getElementById("searchBtn");btn.disabled=!!busy;if(busy)btn.textContent=label||"处理中...";else refreshModeButton()}
 function pollProgress(){if(!exportTaskId)return;if(exportPollTimer)clearInterval(exportPollTimer);exportPollTimer=setInterval(function(){fetch("/api/progress?task_id="+exportTaskId).then(function(r){return r.json()}).then(function(data){if(!data.success){clearInterval(exportPollTimer);exportPollTimer=null;setSearchBusy(false);var err=formatApiError(data,"任务状态不可用");if(progressUiMode==="panel")showExportPanelError(err);else{document.getElementById("progressTitle").textContent="导出失败";document.getElementById("progressDetails").innerHTML='<span style="color:#dc2626">'+escHtml(err)+"</span>";document.getElementById("progressActions").innerHTML='<button class="btn btn-secondary" onclick="hideOverlay()">关闭</button>'}return}var d=data.data,pct=(Math.max(0,Math.min(d.progress||0,1))*100).toFixed(1);if(progressUiMode==="panel")updateExportPanel(d,pct);else{document.getElementById("progressFill").style.width=pct+"%";document.getElementById("progressDetails").innerHTML=renderProgressDetails(d,pct)}if(d.status==="done"){clearInterval(exportPollTimer);exportPollTimer=null;setSearchBusy(false);if(progressUiMode==="panel")updateExportPanel(d,"100.0");else{document.getElementById("progressTitle").textContent=d.kind==="batch"?"批量导出完成":"导出完成";document.getElementById("progressActions").innerHTML='<button class="btn btn-primary" onclick="downloadExport(\'csv\')">下载 CSV</button><button class="btn btn-secondary" onclick="downloadExport(\'json\')">下载 JSON</button><button class="btn btn-secondary" onclick="downloadExport(\'txt\')">下载 TXT</button><button class="btn btn-secondary" onclick="hideOverlay()">关闭</button>'}}else if(d.status==="error"){clearInterval(exportPollTimer);exportPollTimer=null;setSearchBusy(false);if(progressUiMode==="panel")updateExportPanel(d,pct);else{document.getElementById("progressTitle").textContent="导出失败";document.getElementById("progressDetails").innerHTML='<span style="color:#dc2626">'+escHtml(d.error||"未知错误")+"</span>";document.getElementById("progressActions").innerHTML='<button class="btn btn-secondary" onclick="hideOverlay()">关闭</button>'}}}).catch(function(e){clearInterval(exportPollTimer);exportPollTimer=null;setSearchBusy(false);if(progressUiMode==="panel")showExportPanelError("网络错误: "+e.message);else{document.getElementById("progressTitle").textContent="导出失败";document.getElementById("progressDetails").innerHTML='<span style="color:#dc2626">网络错误: '+escHtml(e.message)+"</span>";document.getElementById("progressActions").innerHTML='<button class="btn btn-secondary" onclick="hideOverlay()">关闭</button>'}})},800)}
-function cancelExport(){if(exportTaskId){if(progressUiMode==="panel"){document.getElementById("exportPanelState").textContent="取消中";document.getElementById("exportPanelActions").innerHTML="";document.getElementById("exportPanelMessage").textContent="取消请求已发送，正在等待当前请求结束..."}else{document.getElementById("progressTitle").textContent="正在取消";document.getElementById("progressActions").innerHTML="";document.getElementById("progressDetails").innerHTML="取消请求已发送，正在等待当前请求结束..."}fetch("/api/progress/cancel?task_id="+exportTaskId,{method:"POST"})}}
+function cancelExport(){if(exportTaskId)document.getElementById("cancelOverlay").classList.add("show")}
+function confirmCancel(save){if(!exportTaskId)return;document.getElementById("cancelOverlay").classList.remove("show");var discard=save?"0":"1";if(progressUiMode==="panel"){document.getElementById("exportPanelState").textContent="取消中";document.getElementById("exportPanelActions").innerHTML="";document.getElementById("exportPanelMessage").textContent="取消请求已发送，正在等待当前请求结束..."}else{document.getElementById("progressTitle").textContent="正在取消";document.getElementById("progressActions").innerHTML="";document.getElementById("progressDetails").innerHTML="取消请求已发送，正在等待当前请求结束..."}fetch("/api/progress/cancel?task_id="+exportTaskId+"&discard="+discard,{method:"POST"})}
+function hideCancelConfirm(){document.getElementById("cancelOverlay").classList.remove("show")}
 function downloadExport(format){if(exportTaskId)window.open("/api/export/download?task_id="+exportTaskId+"&format="+format,"_blank")}
 function showOverlay(title){document.getElementById("progressTitle").textContent=title;document.getElementById("progressFill").style.width="0%";document.getElementById("progressDetails").innerHTML="初始化中...";document.getElementById("progressActions").innerHTML='<button class="btn btn-secondary" onclick="cancelExport()">取消</button>';document.getElementById("progressOverlay").classList.add("show")}
 function hideOverlay(){document.getElementById("progressOverlay").classList.remove("show")}
-function renderResults(data){var area=document.getElementById("resultsArea"),rows=data.results||[],table=document.getElementById("resultsTable"),empty=document.getElementById("emptyState");previewRendered=true;syncModeContent();var actions=rows.length>0?'<div class="stats-actions"><span class="preview-status" id="previewStatus"></span><button class="mini-btn" onclick="exportPreview(&quot;csv&quot;)">导出 CSV</button><button class="mini-btn" onclick="exportPreview(&quot;json&quot;)">JSON</button><button class="mini-btn" onclick="exportPreview(&quot;txt&quot;)">TXT</button></div>':"";document.getElementById("statsBar").innerHTML='<div class="stats-metrics"><span class="stat-item"><span class="stat-dot" style="background:var(--accent)"></span>总计: <span class="stat-value">'+(data.total||0).toLocaleString()+'</span></span><span class="stat-item"><span class="stat-dot" style="background:var(--success)"></span>独立IP: <span class="stat-value">'+(data.unique_ips||0).toLocaleString()+'</span></span><span class="stat-item"><span class="stat-dot" style="background:var(--warning)"></span>结果: <span class="stat-value">'+rows.length.toLocaleString()+'</span></span></div>'+actions;var cols=data.columns||[];if(cols.length===0&&rows.length>0)cols=Object.keys(rows[0]);currentColumns=cols;if(rows.length===0){table.style.display="none";empty.style.display="block";empty.textContent=(data.total||0)>0?"当前预览没有返回记录，可调大数量或更换字段后重试。":"没有匹配结果。";document.querySelector("#resultsTable thead").innerHTML="";document.querySelector("#resultsTable tbody").innerHTML="";updateLayout();return}table.style.display="table";empty.style.display="none";var thead="";cols.forEach(function(col){var sc=sortColumn===col?" sorted":"";thead+="<th class=\""+sc+"\" onclick=\"sortBy('"+escHtml(col)+"')\">"+(sortColumn===col?(sortAsc?"▲ ":"▼ "):"")+escHtml(col)+"</th>"});document.querySelector("#resultsTable thead").innerHTML="<tr>"+thead+"</tr>";var tbody="";rows.forEach(function(row){tbody+="<tr>";cols.forEach(function(col){var val=row[col]!==undefined?row[col]:"",cls=(col==="ip"||col==="port"||col==="host")?" mono":"";if((col==="host"||col==="url")&&val){var url=val.indexOf("http")===0?val:"http://"+val;tbody+='<td class="'+cls+'"><a href="'+escHtml(url)+'" target="_blank" rel="noopener">'+escHtml(val)+"</a></td>"}else tbody+='<td class="'+cls+'" title="'+escHtml(val)+'">'+escHtml(val)+"</td>"});tbody+="</tr>"});document.querySelector("#resultsTable tbody").innerHTML=tbody;updateLayout()}
+function renderResults(data){var area=document.getElementById("resultsArea"),rows=data.results||[],table=document.getElementById("resultsTable"),empty=document.getElementById("emptyState");previewRendered=true;syncModeContent();var pickBtns='<button class="mini-btn" id="pickFilterBtn" onclick="enterPickMode(\'filter\')">不看</button><button class="mini-btn" id="pickQueryBtn" onclick="enterPickMode(\'query\')">选取查询</button>';var actions=rows.length>0?'<div class="stats-actions"><span class="preview-status" id="previewStatus"></span>'+pickBtns+'<button class="mini-btn" onclick="exportPreview(&quot;csv&quot;)">导出 CSV</button><button class="mini-btn" onclick="exportPreview(&quot;json&quot;)">JSON</button><button class="mini-btn" onclick="exportPreview(&quot;txt&quot;)">TXT</button></div>':"";document.getElementById("statsBar").innerHTML='<div class="stats-metrics"><span class="stat-item"><span class="stat-dot" style="background:var(--accent)"></span>总计: <span class="stat-value">'+(data.total||0).toLocaleString()+'</span></span><span class="stat-item"><span class="stat-dot" style="background:var(--success)"></span>独立IP: <span class="stat-value">'+(data.unique_ips||0).toLocaleString()+'</span></span><span class="stat-item"><span class="stat-dot" style="background:var(--warning)"></span>结果: <span class="stat-value">'+rows.length.toLocaleString()+'</span></span></div>'+actions;var cols=data.columns||[];if(cols.length===0&&rows.length>0)cols=Object.keys(rows[0]);currentColumns=cols;if(rows.length===0){table.style.display="none";empty.style.display="block";empty.textContent=excludedFilters.length?"所有结果已被「不看」排除，移除排除项可恢复显示。":((data.total||0)>0?"当前预览没有返回记录，可调大数量或更换字段后重试。":"没有匹配结果。");document.querySelector("#resultsTable thead").innerHTML="";document.querySelector("#resultsTable tbody").innerHTML="";updateLayout();return}table.style.display="table";empty.style.display="none";var thead="";cols.forEach(function(col){var sc=sortColumn===col?" sorted":"";thead+="<th class=\""+sc+"\" onclick=\"sortBy('"+escHtml(col)+"')\">"+(sortColumn===col?(sortAsc?"▲ ":"▼ "):"")+escHtml(col)+"</th>"});document.querySelector("#resultsTable thead").innerHTML="<tr>"+thead+"</tr>";var tbody="";rows.forEach(function(row){tbody+="<tr>";cols.forEach(function(col){var val=row[col]!==undefined?row[col]:"",cls=(col==="ip"||col==="port"||col==="host")?" mono":"";if((col==="host"||col==="url")&&val){var url=val.indexOf("http")===0?val:"http://"+val;tbody+='<td class="'+cls+'"><a href="'+escHtml(url)+'" target="_blank" rel="noopener">'+escHtml(val)+"</a></td>"}else tbody+='<td class="'+cls+'" title="'+escHtml(val)+'">'+escHtml(val)+"</td>"});tbody+="</tr>"});document.querySelector("#resultsTable tbody").innerHTML=tbody;updateLayout()}
 function previewTimestamp(){return new Date().toISOString().replace(/[-:]/g,"").replace(/\..+/,"").replace("T","_")}
 function previewColumns(){return currentColumns.length?currentColumns:Object.keys(currentResults[0]||{})}
 function previewRows(){var cols=previewColumns();return currentResults.map(function(row){var out={};cols.forEach(function(col){out[col]=row[col]!==undefined&&row[col]!==null?row[col]:""});return out})}
@@ -402,14 +432,25 @@ function previewUrl(row){var val=row.url||row.link||row.host||"";if(!val&&row.ip
 function downloadPreviewBlob(content,filename,type){var blob=new Blob([content],{type:type}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url)},1000)}
 function showPreviewStatus(text){var el=document.getElementById("previewStatus");if(el){el.textContent=text;updateLayout()}else showMessage("info",text)}
 function exportPreview(format){if(!currentResults.length){showMessage("error","当前预览没有可导出的结果");return}var cols=previewColumns(),rows=previewRows(),ts=previewTimestamp(),content="",filename="fofatoto_preview_"+ts+"."+format,type="text/plain;charset=utf-8";if(format==="csv"){content="\ufeff"+[cols.map(csvCell).join(",")].concat(rows.map(function(row){return cols.map(function(col){return csvCell(row[col])}).join(",")})).join("\r\n")+"\r\n";type="text/csv;charset=utf-8"}else if(format==="json"){content=JSON.stringify(rows,null,2)+"\n";type="application/json;charset=utf-8"}else{var values;if(cols.length===1&&cols[0]==="ip")values=currentResults.map(function(row){return row.ip||""});else if(cols.length===1&&cols[0]==="domain")values=currentResults.map(function(row){return row.domain||""});else values=currentResults.map(previewUrl);content=values.filter(function(v){return v}).join("\n")+"\n"}downloadPreviewBlob(content,filename,type);clearMessage();showPreviewStatus("已导出 "+currentResults.length.toLocaleString()+" 条")}
-function sortBy(col){if(sortColumn===col){sortAsc=!sortAsc}else{sortColumn=col;sortAsc=true}currentResults.sort(function(a,b){var va=a[col]||"",vb=b[col]||"";if(va<vb)return sortAsc?-1:1;if(va>vb)return sortAsc?1:-1;return 0});renderResults({results:currentResults,columns:currentColumns,total:currentResults.length,unique_ips:0})}
-function clearResults(){previewRendered=false;document.getElementById("resultsArea").style.display="none";document.getElementById("resultsTable").style.display="table";document.getElementById("emptyState").style.display="none";document.querySelector("#resultsTable thead").innerHTML="";document.querySelector("#resultsTable tbody").innerHTML="";currentResults=[];currentColumns=[];sortColumn=null;updateLayout()}
+function sortBy(col){if(sortColumn===col){sortAsc=!sortAsc}else{sortColumn=col;sortAsc=true}currentResults.sort(function(a,b){var va=a[col]||"",vb=b[col]||"";if(va<vb)return sortAsc?-1:1;if(va>vb)return sortAsc?1:-1;return 0});renderCurrentView()}
+var pickModeActive=false,pickModeAction="query",excludedFilters=[];
+function enterPickMode(mode){if(!currentResults.length){showMessage("error","当前预览没有可选取的结果");return}if(pickModeActive)return;pickModeActive=true;pickModeAction=mode;var t=document.getElementById("resultsTable");t.classList.add("picking");var bId=mode==="filter"?"pickFilterBtn":"pickQueryBtn",b=document.getElementById(bId);if(b)b.classList.add("pick-active");t.addEventListener("click",pickTableClick,true);document.addEventListener("keydown",pickKeyHandler);showPreviewStatus(mode==="filter"?"不看：点击单元格排除该值，Esc 取消":"加入查询：点击单元格选取值加入查询，Esc 取消")}
+function exitPickMode(){if(!pickModeActive)return;pickModeActive=false;var t=document.getElementById("resultsTable");if(t){t.classList.remove("picking");t.removeEventListener("click",pickTableClick,true)}["pickFilterBtn","pickQueryBtn"].forEach(function(id){var b=document.getElementById(id);if(b)b.classList.remove("pick-active")});document.removeEventListener("keydown",pickKeyHandler);showPreviewStatus(excludedFilters.length?("已排除 "+excludedFilters.length+" 项"):"")}
+function pickTableClick(e){if(!pickModeActive)return;var td=e.target.closest?e.target.closest("td"):null;if(!td)return;e.preventDefault();e.stopPropagation();var idx=td.cellIndex;if(idx<0||idx>=currentColumns.length)return;var field=currentColumns[idx],value=(td.textContent||"").trim();if(!value)return;exitPickMode();if(pickModeAction==="filter")addExclusion(field,value);else applyQueryPick(field,value)}
+function pickKeyHandler(e){if(e.key==="Escape"){e.preventDefault();exitPickMode()}}
+function applyQueryPick(field,value){var safe=value.replace(/"/g,'\\"');var frag=field+'="'+safe+'"';var input=document.getElementById("queryInput"),cur=input.value.trim();if(!cur)input.value=frag;else if(/(&&|\|\|)\s*$/.test(cur))input.value=cur+" "+frag;else input.value=cur+" && "+frag;input.focus();if(document.getElementById("instantAutoQuery").checked)executeSearch()}
+function addExclusion(field,value){for(var i=0;i<excludedFilters.length;i++){if(excludedFilters[i].field===field&&excludedFilters[i].value===value)return}excludedFilters.push({field:field,value:value});renderCurrentView()}
+function removeExclusion(index){if(index<0||index>=excludedFilters.length)return;excludedFilters.splice(index,1);renderCurrentView()}
+function renderExclusionChips(){var c=document.getElementById("exclusionChips");if(!c)return;var h="";excludedFilters.forEach(function(f,i){h+='<span class="exc-chip">不看 '+escHtml(f.field)+'="'+escHtml(f.value)+'"<span class="exc-x" onclick="removeExclusion('+i+')">&times;</span></span>'});c.innerHTML=h}
+function renderCurrentView(){var view=currentResults,ips={};if(excludedFilters.length){view=currentResults.filter(function(r){return !excludedFilters.some(function(f){return String(r[f.field]||"")===String(f.value)})})}view.forEach(function(r){if(r.ip)ips[r.ip]=1});renderResults({results:view,columns:currentColumns,total:currentResults.length,unique_ips:Object.keys(ips).length});renderExclusionChips();if(excludedFilters.length)showPreviewStatus("已排除 "+excludedFilters.length+" 项，显示 "+view.length+"/"+currentResults.length)}
+function toggleSettings(e){if(e)e.stopPropagation();var p=document.getElementById("settingsPopup");p.classList.toggle("show")}
+function clearResults(){exitPickMode();excludedFilters=[];renderExclusionChips();previewRendered=false;document.getElementById("resultsArea").style.display="none";document.getElementById("resultsTable").style.display="table";document.getElementById("emptyState").style.display="none";document.querySelector("#resultsTable thead").innerHTML="";document.querySelector("#resultsTable tbody").innerHTML="";currentResults=[];currentColumns=[];sortColumn=null;updateLayout()}
 function updateShellHeight(){var header=document.querySelector(".header");if(header)document.documentElement.style.setProperty("--header-height",Math.ceil(header.getBoundingClientRect().height)+"px")}
 function updateLayout(){syncModeContent();updateShellHeight();fitHistoryDropdown();fitResultsHeight()}
 function shellBottom(){var shell=document.querySelector(".container");return shell?shell.getBoundingClientRect().bottom:window.innerHeight}
-function fitResultsHeight(){var area=document.getElementById("resultsArea"),box=document.querySelector("#resultsArea .table-container");if(!area||!box||area.style.display==="none")return;var rect=box.getBoundingClientRect(),pad=window.innerWidth<=760?12:24,minH=window.innerHeight<560?120:180,available=shellBottom()-rect.top-pad-2;box.style.maxHeight=Math.max(minH,available)+"px"}
-function showMessage(type,text){document.getElementById("messageArea").innerHTML='<div class="message '+type+'">'+escHtml(text)+"</div>"}
-function clearMessage(){document.getElementById("messageArea").innerHTML=""}
+function fitResultsHeight(){var area=document.getElementById("resultsArea"),box=document.querySelector("#resultsArea .table-container");if(!area||!box||area.style.display==="none")return;var rect=box.getBoundingClientRect(),pad=window.innerWidth<=760?12:24,minH=window.innerHeight<560?120:180,msgEl=document.getElementById("messageArea"),msgH=msgEl&&msgEl.offsetHeight?msgEl.offsetHeight+12:0,available=shellBottom()-rect.top-pad-2-msgH;box.style.maxHeight=Math.max(minH,available)+"px"}
+function showMessage(type,text){document.getElementById("messageArea").innerHTML='<div class="message '+type+'">'+escHtml(text)+"</div>";updateLayout()}
+function clearMessage(){document.getElementById("messageArea").innerHTML="";updateLayout()}
 function getHistory(){try{return JSON.parse(localStorage.getItem("fofa_query_history")||"[]")}catch(e){return[]}}
 function saveHistory(history){localStorage.setItem("fofa_query_history",JSON.stringify(history))}
 function addToHistory(query){try{var history=getHistory();history=history.filter(function(h){return h.query!==query});history.unshift({query:query,mode:currentMode,time:Date.now()});if(history.length>50)history=history.slice(0,50);saveHistory(history);updateHistoryCount()}catch(e){}}
@@ -422,7 +463,7 @@ function pickActiveHistory(){if(historyActiveIndex<0||!historyVisibleItems[histo
 function toggleHistory(){var dd=document.getElementById("historyDropdown");if(dd&&dd.classList.contains("show"))closeHistorySuggestions();else renderHistorySuggestions(true)}
 function insertHistory(index){try{var history=getHistory();if(history[index]){document.getElementById("queryInput").value=history[index].query;switchMode(history[index].mode||"instant");closeHistorySuggestions();document.getElementById("queryInput").focus()}}catch(e){}}
 function deleteHistory(index){try{var history=getHistory();history.splice(index,1);saveHistory(history);updateHistoryCount();renderHistorySuggestions()}catch(e){}}
-document.addEventListener("click",function(e){if(!e.target.closest(".search-input-wrap"))closeHistorySuggestions()});
+document.addEventListener("click",function(e){if(!e.target.closest(".search-input-wrap"))closeHistorySuggestions();if(!e.target.closest(".settings-wrap"))document.getElementById("settingsPopup").classList.remove("show")});
 function escHtml(str){var div=document.createElement("div");div.appendChild(document.createTextNode(str));return div.innerHTML}
 </script>
 </body>
@@ -452,6 +493,8 @@ class ConfigManager:
         self.url = ""
         self.key = ""
         self.last_error = ""
+        self._client = None
+        self._client_signature = None
 
     def _get_config_dir(self) -> Path:
         """获取配置目录。
@@ -507,7 +550,12 @@ class ConfigManager:
         return bool(self.url and self.key and self.key not in placeholder_keys)
 
     def public_status(self) -> dict:
-        """返回可安全展示给 Web UI 的配置状态。"""
+        """返回可安全展示给 Web UI 的配置状态。
+
+        每次调用前重新读取配置，支持热更新：Web UI 无需重启即可
+        感知 config.json 的最新变化（用于配置引导提示和状态展示）。
+        """
+        self.load()
         return {
             "configured": self.is_valid(),
             "config_path": str(self.config_file),
@@ -516,6 +564,23 @@ class ConfigManager:
             ),
             "error": self.last_error,
         }
+
+    def get_client(self) -> Optional[FofaClient]:
+        """按需重新读取配置并返回有效 client；配置未变化时复用缓存。
+
+        用于 Web UI 热更新：用户修改 config.json 后无需重启服务，
+        下次请求会检测到配置变化并重建 FofaClient。
+        """
+        self.load()
+        if not self.is_valid():
+            self._client = None
+            self._client_signature = None
+            return None
+        signature = (self.url, self.key)
+        if self._client is None or self._client_signature != signature:
+            self._client = FofaClient(self.url, self.key)
+            self._client_signature = signature
+        return self._client
 
 
 # ============ FOFA API 相关 ============
@@ -1712,6 +1777,7 @@ class ExportTask:
     partial_error: str = ""
     created_at: float = field(default_factory=time.time)
     cancelled: bool = False
+    discard: bool = False
 
 
 def _redact_sensitive(text: str, *secrets: str) -> str:
@@ -1731,6 +1797,7 @@ def _create_web_progress_callback(task_id: str, max_size: int = 0):
             if not task:
                 return
             cancelled = task.cancelled
+            discard = task.discard
             event = state.get("event")
             if event == "no_match":
                 task.message = "未找到匹配数据"
@@ -1770,23 +1837,19 @@ def _create_web_progress_callback(task_id: str, max_size: int = 0):
                 task.fetched = state.get("fetched", 0)
                 task.message = "已达到目标数量，正在整理文件"
             elif event == "interrupted":
-                if cancelled:
-                    task.status = "error"
-                    task.error = "Cancelled by user"
                 task.message = "Interrupted"
             elif event == "done":
-                if not cancelled:
-                    task.progress = 0.99
-                    if state.get("interrupted"):
-                        task.partial = True
-                        task.partial_error = state.get("partial_error", "")
-                        task.message = "部分结果已获取，正在生成导出文件"
-                    else:
-                        task.message = "正在生成导出文件"
+                task.progress = 0.99
+                if state.get("interrupted"):
+                    task.partial = True
+                    task.partial_error = state.get("partial_error", "")
+                    task.message = "部分结果已获取，正在生成导出文件"
+                else:
+                    task.message = "正在生成导出文件"
                 task.fetched = state.get("fetched", 0)
                 task.unique_ips = state.get("unique_ips", 0)
                 task.total_quota_used = state.get("total_quota_used", 0)
-        if cancelled:
+        if cancelled and (discard or event not in ("interrupted", "done")):
             raise KeyboardInterrupt()
 
     return progress_callback
@@ -1800,10 +1863,10 @@ def _create_web_batch_progress_callback(
             task = _export_tasks.get(task_id)
             if not task:
                 return
-            if task.cancelled:
+            event = state.get("event")
+            if task.cancelled and (task.discard or event not in ("interrupted", "done")):
                 raise KeyboardInterrupt()
 
-            event = state.get("event")
             task.current_target = batch_idx + 1
             task.total_targets = total_queries
             if event == "init":
@@ -1874,8 +1937,19 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             payload["data"] = data
         self._send_json(payload, status)
 
+    def _current_client(self) -> Optional[FofaClient]:
+        """获取当前有效的 client，支持配置热更新。
+
+        有 config_manager 时每次请求重新读取配置并按需重建 client；
+        无 config_manager（CLI 直接传 client）时回退到 self.client。
+        """
+        if self.config_manager:
+            return self.config_manager.get_client()
+        return self.client
+
     def _require_client(self) -> bool:
-        if self.client and (not self.config_manager or self.config_manager.is_valid()):
+        client = self._current_client()
+        if client:
             return True
         data = self._config_status()
         data["configured"] = False
@@ -1940,16 +2014,15 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"success": False, "error": "Not found"}, 404)
 
     def _handle_info(self):
-        if not self.client or (
-            self.config_manager and not self.config_manager.is_valid()
-        ):
+        client = self._current_client()
+        if not client:
             data = self._config_status()
             data["server_ok"] = False
             self._send_json({"success": True, "data": data})
             return
 
         try:
-            info = self.client.get_usage()
+            info = client.get_usage()
             info["server_ok"] = True
             info.update(self._config_status())
             self._send_json({"success": True, "data": info})
@@ -1969,13 +2042,15 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                 self._send_error("Query is required")
                 return
 
-            size = int(body.get("size", 100))
-            fields = body.get("fields", DEFAULT_FIELDS)
-            full = body.get("full", False)
+            try:
+                size = int(body.get("size", 100))
+            except (TypeError, ValueError):
+                size = 100
+            size = max(1, min(size, 10000))
+            fields = body.get("fields") or DEFAULT_FIELDS
+            full = bool(body.get("full", False))
 
-            stats = self.client.search(
-                query, size=max(1, min(size, 10000)), fields=fields, full=full
-            )
+            stats = self._current_client().search(query, size=size, fields=fields, full=full)
 
             columns = [f.strip() for f in fields.split(",") if f.strip()]
             has_url = "url" in columns
@@ -2012,10 +2087,20 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                 self._send_error("Query is required")
                 return
 
-            fields = body.get("fields", DEFAULT_FIELDS)
-            fill_percent = float(body.get("fill_percent", 0.8))
-            max_size = int(body.get("max_size", 0))
-            full = body.get("full", False)
+            fields = body.get("fields") or DEFAULT_FIELDS
+            try:
+                fill_percent = float(body.get("fill_percent", 0.8))
+            except (TypeError, ValueError):
+                fill_percent = 0.8
+            if not (0 < fill_percent <= 1):
+                fill_percent = 0.8
+            try:
+                max_size = int(body.get("max_size", 0))
+            except (TypeError, ValueError):
+                max_size = 0
+            if max_size < 0:
+                max_size = 0
+            full = bool(body.get("full", False))
 
             task_id = uuid.uuid4().hex[:12]
             task = ExportTask(task_id=task_id, kind="export")
@@ -2036,8 +2121,16 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             self._send_error(e)
 
     def _run_export_task(self, task_id, query, fields, fill_percent, max_size, full):
+        client = self._current_client()
+        if not client:
+            with _export_lock:
+                task = _export_tasks.get(task_id)
+                if task:
+                    task.status = "error"
+                    task.error = "未配置有效的 FOFA API Key"
+            return
         try:
-            stats = self.client.search_all_efficient(
+            stats = client.search_all_efficient(
                 query,
                 max_size=max_size,
                 fields=fields,
@@ -2046,12 +2139,29 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                 progress_callback=_create_web_progress_callback(task_id, max_size),
             )
 
+            cancelled = False
+            discard = False
             with _export_lock:
                 task = _export_tasks.get(task_id)
-                if task and task.cancelled:
-                    task.status = "error"
-                    task.error = "Cancelled by user"
-                    return
+                if task:
+                    cancelled = task.cancelled
+                    discard = task.discard
+
+            if discard:
+                with _export_lock:
+                    task = _export_tasks.get(task_id)
+                    if task:
+                        task.status = "error"
+                        task.error = "Cancelled by user"
+                return
+
+            if not stats.results and cancelled:
+                with _export_lock:
+                    task = _export_tasks.get(task_id)
+                    if task:
+                        task.status = "error"
+                        task.error = "Cancelled by user"
+                return
 
             output_dir = Path(tempfile.gettempdir()) / "fofa_web_exports"
             output_dir.mkdir(exist_ok=True)
@@ -2077,12 +2187,20 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                 if task:
                     task.status = "done"
                     task.progress = 1.0
-                    task.partial = stats.partial
-                    task.partial_error = stats.partial_error
+                    task.partial = cancelled or stats.partial
+                    task.partial_error = (
+                        "Cancelled by user"
+                        if cancelled
+                        else stats.partial_error
+                    )
                     task.message = (
-                        "部分导出完成，已保留可用结果"
-                        if stats.partial
-                        else "导出文件已生成"
+                        "已取消，已保留部分结果"
+                        if cancelled
+                        else (
+                            "部分导出完成，已保留可用结果"
+                            if stats.partial
+                            else "导出文件已生成"
+                        )
                     )
                     task.fetched = len(stats.results)
                     task.total_estimated = stats.total
@@ -2172,8 +2290,13 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             base_query = body.get("base_query", "")
             targets = body.get("targets", [])
             placeholder = body.get("placeholder", "{}")
-            fields = body.get("fields", DEFAULT_FIELDS)
-            fill_percent = float(body.get("fill_percent", 0.8))
+            fields = body.get("fields") or DEFAULT_FIELDS
+            try:
+                fill_percent = float(body.get("fill_percent", 0.8))
+            except (TypeError, ValueError):
+                fill_percent = 0.8
+            if not (0 < fill_percent <= 1):
+                fill_percent = 0.8
 
             if not base_query or not targets:
                 self._send_error("Base query and targets required")
@@ -2205,6 +2328,14 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             self._send_error(e)
 
     def _run_batch_task(self, task_id, queries, fields, fill_percent):
+        client = self._current_client()
+        if not client:
+            with _export_lock:
+                task = _export_tasks.get(task_id)
+                if task:
+                    task.status = "error"
+                    task.error = "未配置有效的 FOFA API Key"
+            return
         try:
             all_results = []
             total_queries = len(queries)
@@ -2226,7 +2357,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
 
                 stats = None
                 try:
-                    stats = self.client.search_all_efficient(
+                    stats = client.search_all_efficient(
                         query,
                         max_size=0,
                         fields=fields,
@@ -2284,9 +2415,41 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         except KeyboardInterrupt:
             with _export_lock:
                 task = _export_tasks.get(task_id)
-                if task:
+                if task and task.discard:
                     task.status = "error"
                     task.error = "Cancelled by user"
+                    return
+            if all_results:
+                output_dir = Path(tempfile.gettempdir()) / "fofa_web_exports"
+                output_dir.mkdir(exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                exporter = Exporter(all_results, fields=fields)
+                output_files = {}
+                csv_path = unique_path(output_dir / f"fofa_batch_{timestamp}.csv")
+                exporter.export_csv(csv_path)
+                output_files["csv"] = str(csv_path)
+                json_path = unique_path(output_dir / f"fofa_batch_{timestamp}.json")
+                exporter.export_json(json_path)
+                output_files["json"] = str(json_path)
+                txt_path = unique_path(output_dir / f"fofa_batch_{timestamp}.txt")
+                exporter.export_txt(txt_path)
+                output_files["txt"] = str(txt_path)
+                with _export_lock:
+                    task = _export_tasks.get(task_id)
+                    if task:
+                        task.status = "done"
+                        task.progress = 1.0
+                        task.partial = True
+                        task.partial_error = "Cancelled by user"
+                        task.message = "已取消，已保留部分结果"
+                        task.fetched = len(all_results)
+                        task.output_files = output_files
+            else:
+                with _export_lock:
+                    task = _export_tasks.get(task_id)
+                    if task:
+                        task.status = "error"
+                        task.error = "Cancelled by user"
         except Exception as e:
             with _export_lock:
                 task = _export_tasks.get(task_id)
@@ -2298,11 +2461,14 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
         task_id = params.get("task_id", [None])[0]
+        discard = params.get("discard", ["0"])[0] == "1"
 
         with _export_lock:
             task = _export_tasks.get(task_id)
             if task:
                 task.cancelled = True
+                if discard:
+                    task.discard = True
 
         self._send_json({"success": True})
 

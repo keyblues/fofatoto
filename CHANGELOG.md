@@ -3,6 +3,30 @@
 本文件使用发布记录（Releases）风格维护版本变更。
 
 
+## v1.3.0 - 2026-07-09
+
+### 新增
+- Web UI 即时预览模式新增「全部数据」开关（`instantFull`），可切换搜索全部数据（不止一年），与深度导出的「全部数据」语义一致。原先即时预览硬编码 `full:false`（仅近一年数据），现在通过复选框把该值传给 `/api/search` 的 `full` 参数，后端无需改动。
+- Web UI 即时预览新增字段值选取器：结果区操作栏「不看」和「选取查询」两个按钮，点击进入选取模式后鼠标点击任意单元格即可选取该字段值。
+  - 「不看」：多条件排除筛选，选取的值从当前结果中排除（本地过滤），排除项以红底 chip 显示在数量下拉框右侧，可单独移除。
+  - 「选取查询」：选取的值以 `字段="值"` 形式智能追加到查询框，配合「选取查询后自动搜索」开关可自动执行搜索。
+- Web UI 配置热更新：`ConfigManager` 新增 `get_client()` 方法按需重新读取 `config.json` 并按 `(url, key)` 签名缓存 `FofaClient`，`FofaWebHandler` 通过 `_current_client()` 统一获取，用户修改配置后无需重启服务即可生效。
+- Web UI 设置弹窗：「全部数据」和「选取查询后自动搜索」两个开关收纳到即时预览选项行的「设置」弹窗中，点击展开、点击外部自动关闭。
+
+### 优化
+- 美化即时预览数量下拉菜单：`appearance:none` 去掉原生箭头，改用自定义 SVG 箭头（hover/focus 变蓝），字号和配色与 `mini-btn` 统一。
+- 即时预览统计栏状态消息改为显示在「不看/选取查询」按钮旁的 `previewStatus` 位置，不再写入底部 `messageArea`，避免破坏页面布局产生滚动条。`showMessage`/`clearMessage` 现在会调用 `updateLayout()` 重算表格高度；`fitResultsHeight` 计算时扣除 `messageArea` 高度。
+
+### 修复
+- 修复深度导出/批量任务运行中切换到即时预览会隐藏导出面板、丢失进度与下载入口的问题：`switchMode` 在有运行中的导出任务（`exportPollTimer` 存在）且切换到不同模式时拦截并提示，避免用户误以为任务丢失。
+- 修复即时预览点击表头排序后统计栏「独立IP」归零的问题：`sortBy` 排序后通过 `renderCurrentView` 重新统计独立 IP 数传给 `renderResults`。
+- 修复清空所有字段后即时预览/导出/批量发送空 `fields` 导致 FOFA 请求异常的问题：`_handle_search`、`_handle_export`、`_handle_batch` 统一用 `body.get("fields") or DEFAULT_FIELDS` 兜底空字段。
+- 修复后端未校验 `size`/`fill_percent`/`max_size` 范围的问题：`size` 强制 `max(1, min(size, 10000))` 并捕获类型异常；`fill_percent` 限定 `(0, 1]`，越界或非法时回退 0.8；`max_size` 负值回退 0；`full` 统一 `bool()` 规范化。
+
+### 其他
+- 版本号更新：`v1.2.1` -> `v1.3.0`。
+- 完成语法检查验证（`python -m py_compile fofatoto.py`）。
+
 ## v1.2.1 - 2026-06-23
 
 ### 修复

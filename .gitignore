@@ -1,6 +1,7 @@
 *.csv
 *.txt
 *.json
+!config.example.json
 fofa_results*
 fofatoto
 node_modules/
