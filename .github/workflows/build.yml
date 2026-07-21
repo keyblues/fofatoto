@@ -105,6 +105,20 @@ jobs:
           git tag ${{ github.ref_name }}
           git push origin ${{ github.ref_name }}
 
+      - name: Extract changelog for release notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="## v$VERSION" '
+            index($0, ver)==1 { found=1; next }
+            found && /^## v/ { exit }
+            found { print }
+          ' CHANGELOG.md > release_notes.md
+          if [ ! -s release_notes.md ]; then
+            printf '请查看提交记录获取更新详情。\n' > release_notes.md
+          fi
+          echo "===== release notes ====="
+          cat release_notes.md
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -125,22 +139,12 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
+          name: fofatoto ${{ github.ref_name }}
+          body_path: release_notes.md
           files: |
             fofatoto.exe
             fofatoto
             fofatoto_arm64
             fofatoto_mac
             fofatoto_mac_arm64
-          body: |
-            ## fofatoto ${{ github.ref_name }}
-
-            ### 更新内容
-
-            ${{ github.event_name == 'workflow_dispatch' && '手动触发构建' || '请查看提交记录获取更新详情' }}
-
-            ### 变更日志
-
-            ```bash
-            git log ${{ github.ref_name }}~1..${{ github.ref_name }} --oneline
-            ```
           tag_name: ${{ github.ref_name }}
