@@ -32,7 +32,7 @@ from urllib.parse import parse_qs, urlparse
 
 APP_VERSION = "1.3.0"
 GITHUB_URL = "https://github.com/keyblues/fofatoto"
-DEFAULT_CONFIG = {"url": "https://fofa.info", "key": "your-fofa-key-here"}
+DEFAULT_CONFIG = {"url": "https://fofa.info", "key": "your-fofa-key-here", "info_api": ""}
 DEFAULT_WEB_PORT = 17380
 DEFAULT_FIELD_LIST = [
     "host",
@@ -46,6 +46,14 @@ DEFAULT_FIELD_LIST = [
     "city",
 ]
 DEFAULT_FIELDS = ",".join(DEFAULT_FIELD_LIST)
+
+# 已知第三方 FOFA 中转站的账户信息查询 API
+# 键为域名（后缀匹配），值为 URL 模板（{base_url} / {key} 占位符）
+# 未匹配时回退到标准 FOFA /api/v1/info/my 接口；也可在 config.json 中
+# 通过 "info_api" 字段手动指定任意中转站的查询接口完整 URL。
+RELAY_INFO_APIS = {
+    "fafaapi.info": "{base_url}/fofaapi/v1/validate-key?key={key}",
+}
 
 BANNER = rf"""  _____ ___  _____ _      _____ ___ _____ ___
  |  ___/ _ \|  ___/ \    |_   _/ _ \_   _/ _ \
@@ -402,7 +410,7 @@ function setupSearchShortcut(){var input=document.getElementById("queryInput");i
 function showConfigNotice(d){var box=document.getElementById("configAlert");document.getElementById("configAlertTitle").textContent="未配置有效的 FOFA API Key";document.getElementById("configAlertText").textContent="请编辑下方配置文件，保存后刷新本页面。";document.getElementById("configPath").textContent=d.config_path||"";document.getElementById("configTemplate").textContent=d.config_template||"";box.classList.add("show")}
 function hideConfigNotice(){document.getElementById("configAlert").classList.remove("show")}
 function formatApiError(data,fallback){var msg=(data&&data.error)||fallback||"请求失败";if(data&&data.data&&data.data.configured===false&&data.data.config_path){msg+="。配置文件: "+data.data.config_path}return msg}
-function loadAccountInfo(){fetch("/api/info").then(function(r){return r.json()}).then(function(data){var d=data.data||{};if(d.configured===false){showConfigNotice(d);document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">未配置</span> 等待 API Key';return}hideConfigNotice();if(data.success){var vipClass=d.isvip?"active":"inactive",vipText=d.isvip?"VIP "+(d.vip_level||""):"未激活",serverText=d.server_ok?"正常":"异常",serverClass=d.server_ok?"ok":"fail";document.getElementById("accountInfo").innerHTML='<span class="vip-badge '+vipClass+'">'+vipText+'</span> 服务器: <span class="server-status '+serverClass+'">'+serverText+'</span> | 剩余查询: <strong>'+(d.remain_api_query||"N/A")+"</strong> | 过期: "+(d.expiration||"N/A");if(d.server_ok===false&&d.error)showMessage("error",d.error)}else{document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 账户信息不可用';showMessage("error",formatApiError(data,"账户信息不可用"))}}).catch(function(e){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 本地服务不可用';showMessage("error","网络错误: "+e.message)}).finally(function(){updateLayout()})}
+function loadAccountInfo(){fetch("/api/info").then(function(r){return r.json()}).then(function(data){var d=data.data||{};if(d.configured===false){showConfigNotice(d);document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">未配置</span> 等待 API Key';return}hideConfigNotice();if(data.success){if(d.relay){var vClass=d.isvip?"active":"inactive",vText=d.isvip?"有效":"无效";var h='<span class="vip-badge '+vClass+'">'+vText+'</span> '+"剩余查询: <strong>"+(d.remain_api_query||"N/A")+"</strong>";if(d.today_remaining!==null&&d.today_remaining!==undefined)h+=" | 今日剩余: <strong>"+d.today_remaining+"</strong>";h+=" | 过期: "+(d.expiration||"N/A");document.getElementById("accountInfo").innerHTML=h}else{var vipClass=d.isvip?"active":"inactive",vipText=d.isvip?"VIP "+(d.vip_level||""):"未激活",serverText=d.server_ok?"正常":"异常",serverClass=d.server_ok?"ok":"fail";document.getElementById("accountInfo").innerHTML='<span class="vip-badge '+vipClass+'">'+vipText+'</span> 服务器: <span class="server-status '+serverClass+'">'+serverText+'</span> | 剩余查询: <strong>'+(d.remain_api_query||"N/A")+'</strong> | 过期: '+(d.expiration||"N/A");if(d.server_ok===false&&d.error)showMessage("error",d.error)}}else{document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 账户信息不可用';showMessage("error",formatApiError(data,"账户信息不可用"))}}).catch(function(e){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 本地服务不可用';showMessage("error","网络错误: "+e.message)}).finally(function(){updateLayout()})}
 function executeSearch(){var q=document.getElementById("queryInput").value.trim();if(!q)return;closeHistorySuggestions();addToHistory(q);if(currentMode==="instant")doInstantSearch(q);else if(currentMode==="export")doDeepExport(q);else doBatchSearch(q)}
 function doInstantSearch(query){var size=parseInt(document.getElementById("instantSize").value)||100,fields=getSelectedFields(),full=document.getElementById("instantFull").checked;clearResults();showMessage("info","搜索中...");fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:query,size:size,fields:fields,full:full})}).then(function(r){return r.json()}).then(function(data){clearMessage();if(data.success){currentResults=data.data.results||[];currentColumns=data.data.columns||[];renderResults(data.data)}else showMessage("error",formatApiError(data,"搜索失败"))}).catch(function(e){showMessage("error","网络错误: "+e.message)})}
 function doDeepExport(query){var fill=parseFloat(document.getElementById("exportFill").value),maxSize=parseInt(document.getElementById("exportMaxSize").value)||0,fields=getSelectedFields(),full=document.getElementById("exportFull").checked;if(isNaN(fill))fill=0.8;if(fill<=0||fill>1){showMessage("error","覆盖率必须在 0 到 1 之间");return}if(maxSize<0){showMessage("error","上限不能小于 0");return}if(exportPollTimer){showMessage("error","已有导出任务正在运行，请先取消或等待完成");return}progressUiMode="panel";exportTaskId=null;clearMessage();showExportPanelStart(query,fill,maxSize,full);setSearchBusy(true,"导出中...");fetch("/api/export",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:query,fill_percent:fill,max_size:maxSize,fields:fields,full:full})}).then(function(r){return r.json()}).then(function(data){if(data.success){exportTaskId=data.task_id;pollProgress()}else{setSearchBusy(false);showExportPanelError(formatApiError(data,"导出失败"))}}).catch(function(e){setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})}
@@ -492,6 +500,7 @@ class ConfigManager:
         self.config_file = self.config_dir / "config.json"
         self.url = ""
         self.key = ""
+        self.info_api = ""
         self.last_error = ""
         self._client = None
         self._client_signature = None
@@ -539,6 +548,7 @@ class ConfigManager:
                 data = json.loads(self.config_file.read_text(encoding="utf-8"))
                 self.url = data.get("url", "")
                 self.key = data.get("key", "")
+                self.info_api = data.get("info_api", "")
             except Exception as e:
                 self.last_error = str(e)
                 print(f"[警告] 读取 config.json 失败: {e}", file=sys.stderr)
@@ -576,9 +586,10 @@ class ConfigManager:
             self._client = None
             self._client_signature = None
             return None
-        signature = (self.url, self.key)
+        info_api = self.info_api or _detect_relay_info_api(self.url, self.key)
+        signature = (self.url, self.key, info_api)
         if self._client is None or self._client_signature != signature:
-            self._client = FofaClient(self.url, self.key)
+            self._client = FofaClient(self.url, self.key, info_api=info_api)
             self._client_signature = signature
         return self._client
 
@@ -701,20 +712,44 @@ def _infer_domain_from_host(host: str) -> str:
         return hostname
 
 
+def _detect_relay_info_api(base_url: str, key: str) -> str:
+    """根据 base_url 域名自动检测已知中转站，返回对应的账户信息 API URL。
+
+    优先使用 config.json 中手动配置的 info_api；未配置时按
+    RELAY_INFO_APIS 表进行域名后缀匹配。匹配不到则返回空字符串，
+    回退到标准 FOFA /api/v1/info/my 接口。
+    """
+    try:
+        host = urlparse(base_url).hostname or ""
+    except Exception:
+        return ""
+    for domain, template in RELAY_INFO_APIS.items():
+        if host == domain or host.endswith("." + domain):
+            return template.replace("{base_url}", base_url.rstrip("/")).replace("{key}", key)
+    return ""
+
+
 class FofaClient:
     """FOFA API 客户端"""
 
-    def __init__(self, url: str, key: str):
+    def __init__(self, url: str, key: str, info_api: str = ""):
         self.base_url = url.rstrip("/")
         self.key = key
+        self.info_api = info_api
 
     def get_usage(self) -> dict:
         """
-        获取 FOFA API 使用量信息
+        获取账户信息。
+
+        若配置了自定义 info_api（手动指定或自动识别中转站），
+        调用中转站接口并将响应归一化为标准 FOFA 字段格式；
+        否则调用标准 /api/v1/info/my 接口。
 
         Returns:
             包含用户信息的字典
         """
+        if self.info_api:
+            return self._get_usage_relay()
         api_url = f"{self.base_url}/api/v1/info/my?key={self.key}"
         try:
             resp = urllib.request.urlopen(api_url, timeout=10)
@@ -727,6 +762,24 @@ class FofaClient:
         except Exception as e:
             err_msg = str(e).replace(self.key, "***") if self.key else str(e)
             raise FofaAPIError(f"获取用量失败: {err_msg}")
+
+    def _get_usage_relay(self) -> dict:
+        """通过中转站自定义 API 获取账户信息并归一化为标准字段。"""
+        try:
+            resp = urllib.request.urlopen(self.info_api, timeout=10)
+            data = json.loads(resp.read().decode())
+        except Exception as e:
+            err_msg = str(e).replace(self.key, "***") if self.key else str(e)
+            raise FofaAPIError(f"获取用量失败: {err_msg}")
+        return {
+            "isvip": bool(data.get("valid", False)),
+            "vip_level": "中转",
+            "remain_api_query": data.get("totalRemaining", "N/A"),
+            "expiration": data.get("expireTime", "N/A"),
+            "today_remaining": data.get("todayRemaining"),
+            "first_used": data.get("firstUsedAt"),
+            "relay": True,
+        }
 
     def search(
         self,
@@ -1600,18 +1653,30 @@ def print_account_status(client: FofaClient):
     try:
         user_info = client.get_usage()
         if user_info:
-            is_vip = user_info.get("isvip", False)
-            vip_status = f"{GREEN}正常{RESET}" if is_vip else f"{RED}无效{RESET}"
-            server_status = (
-                f"{GREEN}正常{RESET}"
-                if user_info.get("fofa_server")
-                else f"{RED}异常{RESET}"
-            )
-            print(highlight("[*] 服务器", server_status))
-            print(highlight("[*] Key状态", vip_status))
-            print(highlight("[*] 剩余查询", user_info.get("remain_api_query", "N/A")))
-            print(highlight("[*] 过期时间", user_info.get("expiration", "N/A")))
-            print(highlight("[*] VIP等级", user_info.get("vip_level", "N/A")))
+            if user_info.get("relay"):
+                valid = user_info.get("isvip", False)
+                status = f"{GREEN}有效{RESET}" if valid else f"{RED}无效{RESET}"
+                print(highlight("[*] 类型", "中转站"))
+                print(highlight("[*] Key状态", status))
+                print(highlight("[*] 剩余查询", user_info.get("remain_api_query", "N/A")))
+                if user_info.get("today_remaining") is not None:
+                    print(highlight("[*] 今日剩余", user_info["today_remaining"]))
+                print(highlight("[*] 过期时间", user_info.get("expiration", "N/A")))
+                if user_info.get("first_used"):
+                    print(highlight("[*] 首次使用", user_info["first_used"]))
+            else:
+                is_vip = user_info.get("isvip", False)
+                vip_status = f"{GREEN}正常{RESET}" if is_vip else f"{RED}无效{RESET}"
+                server_status = (
+                    f"{GREEN}正常{RESET}"
+                    if user_info.get("fofa_server")
+                    else f"{RED}异常{RESET}"
+                )
+                print(highlight("[*] 服务器", server_status))
+                print(highlight("[*] Key状态", vip_status))
+                print(highlight("[*] 剩余查询", user_info.get("remain_api_query", "N/A")))
+                print(highlight("[*] 过期时间", user_info.get("expiration", "N/A")))
+                print(highlight("[*] VIP等级", user_info.get("vip_level", "N/A")))
             print()
     except FofaAPIError as e:
         print(f"[!] 用量检查失败: {e}", file=sys.stderr)
