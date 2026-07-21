@@ -1584,6 +1584,7 @@ def build_parser():
   %(prog)s "domain=baidu.com" -l max -o all.csv   # 导出全部匹配数据
   %(prog)s "ip=1.1.1.1/24" -json -o ips.json      # 输出 JSON 格式
   %(prog)s "domain=baidu.com" -f "ip,port"        # 指定查询字段
+  %(prog)s -c                                      # 快速检测账户状态
         """,
     )
     parser.add_argument("query", nargs="?", help="FOFA 查询语句，如: domain=baidu.com")
@@ -1639,6 +1640,12 @@ def build_parser():
         type=int,
         default=0,
         help=f"Web UI 端口号（默认 {DEFAULT_WEB_PORT}，被占用则自动递增）",
+    )
+    parser.add_argument(
+        "-c",
+        "--check",
+        action="store_true",
+        help="快速检测：仅显示账户信息后退出",
     )
     return parser
 
@@ -2599,7 +2606,7 @@ def main():
 
     parser = build_parser()
     args = parser.parse_args()
-    web_mode = args.web or (not args.query and not args.batch_file)
+    web_mode = args.web or (not args.query and not args.batch_file and not args.check)
 
     config_manager = ConfigManager()
     config_file_ready = config_manager.ensure_exists()
@@ -2628,11 +2635,18 @@ def main():
         return
 
     if not config_file_ready or not client:
+        if args.check:
+            print("[!] 配置无效，请检查 config.json", file=sys.stderr)
+            print(f"[*] 配置文件: {config_manager.config_file}")
+            sys.exit(1)
         print("\n请填入配置后重试:", file=sys.stderr)
         print(json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=4), file=sys.stderr)
         sys.exit(1)
 
     print_account_status(client)
+
+    if args.check:
+        return
 
     if args.fill <= 0 or args.fill > 1:
         print("[!] --fill 取值范围必须在 (0, 1]", file=sys.stderr)
