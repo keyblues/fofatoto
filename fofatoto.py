@@ -32,7 +32,7 @@ from urllib.parse import parse_qs, urlparse
 
 APP_VERSION = "1.3.0"
 GITHUB_URL = "https://github.com/keyblues/fofatoto"
-DEFAULT_CONFIG = {"url": "https://fofa.info", "key": "your-fofa-key-here", "info_api": ""}
+DEFAULT_CONFIG = {"url": "https://fofa.info", "key": "your-fofa-key-here"}
 DEFAULT_WEB_PORT = 17380
 DEFAULT_FIELD_LIST = [
     "host",
@@ -49,8 +49,7 @@ DEFAULT_FIELDS = ",".join(DEFAULT_FIELD_LIST)
 
 # 已知第三方 FOFA 中转站的账户信息查询 API
 # 键为域名（后缀匹配），值为 URL 模板（{base_url} / {key} 占位符）
-# 未匹配时回退到标准 FOFA /api/v1/info/my 接口；也可在 config.json 中
-# 通过 "info_api" 字段手动指定任意中转站的查询接口完整 URL。
+# 未匹配时回退到标准 FOFA /api/v1/info/my 接口。
 RELAY_INFO_APIS = {
     "fafaapi.info": "{base_url}/fofaapi/v1/validate-key?key={key}",
 }
@@ -500,7 +499,6 @@ class ConfigManager:
         self.config_file = self.config_dir / "config.json"
         self.url = ""
         self.key = ""
-        self.info_api = ""
         self.last_error = ""
         self._client = None
         self._client_signature = None
@@ -548,7 +546,6 @@ class ConfigManager:
                 data = json.loads(self.config_file.read_text(encoding="utf-8"))
                 self.url = data.get("url", "")
                 self.key = data.get("key", "")
-                self.info_api = data.get("info_api", "")
             except Exception as e:
                 self.last_error = str(e)
                 print(f"[警告] 读取 config.json 失败: {e}", file=sys.stderr)
@@ -586,7 +583,7 @@ class ConfigManager:
             self._client = None
             self._client_signature = None
             return None
-        info_api = self.info_api or _detect_relay_info_api(self.url, self.key)
+        info_api = _detect_relay_info_api(self.url, self.key)
         signature = (self.url, self.key, info_api)
         if self._client is None or self._client_signature != signature:
             self._client = FofaClient(self.url, self.key, info_api=info_api)
@@ -715,12 +712,11 @@ def _infer_domain_from_host(host: str) -> str:
 def _detect_relay_info_api(base_url: str, key: str) -> str:
     """根据 base_url 域名自动检测已知中转站，返回对应的账户信息 API URL。
 
-    优先使用 config.json 中手动配置的 info_api；未配置时按
-    RELAY_INFO_APIS 表进行域名后缀匹配。匹配不到则返回空字符串，
-    回退到标准 FOFA /api/v1/info/my 接口。
+    按 RELAY_INFO_APIS 表进行域名后缀匹配。匹配不到则返回
+    空字符串，回退到标准 FOFA /api/v1/info/my 接口。
     """
     try:
-        host = urlparse(base_url).hostname or ""
+        host = urlparse(base_url.rstrip("/")).hostname or ""
     except Exception:
         return ""
     for domain, template in RELAY_INFO_APIS.items():
@@ -735,15 +731,14 @@ class FofaClient:
     def __init__(self, url: str, key: str, info_api: str = ""):
         self.base_url = url.rstrip("/")
         self.key = key
-        self.info_api = info_api
+        self.info_api = info_api  # 中转站账户信息 API（由 _detect_relay_info_api 自动填充）
 
     def get_usage(self) -> dict:
         """
         获取账户信息。
 
-        若配置了自定义 info_api（手动指定或自动识别中转站），
-        调用中转站接口并将响应归一化为标准 FOFA 字段格式；
-        否则调用标准 /api/v1/info/my 接口。
+        若自动识别到已知中转站，调用对应接口并将响应
+        归一化为标准 FOFA 字段格式；否则调用标准 /api/v1/info/my 接口。
 
         Returns:
             包含用户信息的字典
