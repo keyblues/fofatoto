@@ -2619,7 +2619,7 @@ def main():
             print("[!] 未找到有效的 FOFA API 凭证", file=sys.stderr)
             print(f"[*] 配置文件: {config_manager.config_file}", file=sys.stderr)
     else:
-        client = FofaClient(config_manager.url, config_manager.key)
+        client = config_manager.get_client()
 
     # Web UI 模式: -w 参数 或 无参数直接运行
     if web_mode:
