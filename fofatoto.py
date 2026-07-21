@@ -308,7 +308,7 @@ td{max-width:240px}
 <div class="card">
 <div class="search-row">
 <div class="search-input-wrap">
-<input type="text" id="queryInput" placeholder="FOFA 查询语法，如 domain=baidu.com" autofocus>
+<input type="text" id="queryInput" placeholder="FOFA 查询语法，如 domain=baidu.com" autofocus autocomplete="off" spellcheck="false">
 <div class="history-dropdown" id="historyDropdown"></div>
 </div>
 <button class="btn btn-primary" id="searchBtn" onclick="executeSearch()">搜索</button>
@@ -317,7 +317,7 @@ td{max-width:240px}
 <label>字段</label>
 <div class="field-control" id="fieldControl"></div>
 <div class="field-panel" id="fieldPanel">
-<div class="fp-search-wrap"><input type="text" class="fp-search" id="fpSearch" placeholder="搜索字段..." spellcheck="false"></div>
+<div class="fp-search-wrap"><input type="text" class="fp-search" id="fpSearch" placeholder="搜索字段..." spellcheck="false" autocomplete="off"></div>
 <div class="fp-body" id="fpBody"></div>
 </div>
 </div>
