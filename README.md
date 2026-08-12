@@ -177,6 +177,7 @@ Web UI 提供三种模式：
 ./fofatoto "domain=baidu.com" -f "ip,port" -o ips.csv
 
 # 包含 URL 时自动补充 host、ip、port、protocol
+# 注：url 是工具自定义字段（本地拼接），请求时自动从 API 字段中剥离
 ./fofatoto "domain=baidu.com" -f "url,title" -o urls.csv
 
 # JSON 模式 - 仅输出请求的字段
@@ -190,7 +191,7 @@ Web UI 提供三种模式：
 | 核心 | `host` 域名/IP:端口 · `ip` · `port` · `protocol` · `domain` |
 | 服务 | `title` 网页标题 · `server` Web 服务器 · `product` 产品名 · `version` 版本号 |
 | 位置 | `country` 国家代码 · `city` 城市 · `region` 地区 · `country_name` 国家名称 · `latitude` 纬度 · `longitude` 经度 |
-| 网络 | `asn` · `org` 机构名称 · `base_protocol` 基础协议 (tcp/udp) · `link` URL 链接 · `url` 按 host/port/protocol 自动拼接的完整 URL |
+| 网络 | `asn` · `org` 机构名称 · `base_protocol` 基础协议 (tcp/udp) · `link` URL 链接 · `url` 工具自定义字段（按 host/port/protocol 本地拼接，请求时自动剥离） |
 | 证书 | `cert` 证书信息 · `jarm` Jarm 指纹 · `icp` ICP 备案 · `cname` · `header` HTTP 响应头 · `banner` 协议 Banner |
 | 时间 | `lastupdatetime` 最后更新时间 |
 | 系统 | `os` 操作系统 · `product_category` 产品分类 |

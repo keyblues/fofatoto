@@ -712,16 +712,22 @@ def _append_missing_fields(fields: str, required_fields: list[str]) -> str:
     requested = set(_field_names(fields))
     missing = [f for f in required_fields if f not in requested]
     if missing:
-        fields = fields + "," + ",".join(missing)
+        fields = (fields + "," if fields else "") + ",".join(missing)
     return fields
 
 
-def _ensure_fields_for_url(fields: str) -> str:
-    """当请求包含 url 字段时，确保 host,ip,port,protocol 字段存在"""
-    requested = set(_field_names(fields))
-    if "url" in requested:
-        fields = _append_missing_fields(fields, ["host", "ip", "port", "protocol"])
-    return fields
+def _api_fields(fields: str) -> str:
+    """将用户请求字段转为 FOFA API 实际接受的字段列表。
+
+    url 是本工具自定义字段（由 host/ip/port/protocol 本地拼接），
+    FOFA API 并不提供，直接传入会返回 HTTP 400，必须剥离；
+    同时确保拼接所需的 host,ip,port,protocol 字段存在。
+    """
+    requested = _field_names(fields)
+    if "url" not in requested:
+        return fields
+    fields = ",".join(f for f in requested if f != "url")
+    return _append_missing_fields(fields, ["host", "ip", "port", "protocol"])
 
 
 def _infer_domain_from_host(host: str) -> str:
@@ -828,7 +834,7 @@ class FofaClient:
         if fields is None:
             fields = DEFAULT_FIELDS
         else:
-            fields = _ensure_fields_for_url(fields)
+            fields = _api_fields(fields)
 
         qbase64 = base64.b64encode(query.encode()).decode()
         url = (
@@ -966,7 +972,7 @@ class FofaClient:
         if fields is None:
             fields = DEFAULT_FIELDS
         else:
-            fields = _ensure_fields_for_url(fields)
+            fields = _api_fields(fields)
         fields = _append_missing_fields(fields, ["lastupdatetime", "host"])
 
         all_results = []

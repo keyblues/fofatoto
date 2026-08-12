@@ -10,6 +10,7 @@
 - Web UI 新增 `--host` 监听地址参数：默认 `127.0.0.1` 仅本机可访问；设为 `0.0.0.0` 时监听所有网卡并打印局域网访问地址；非回环监听时提示 Web UI 无鉴权、局域网内任何人可访问并使用 FOFA 配额的风险；显式指定监听地址后不再自动打开浏览器（启动横幅已打印访问地址，可手动打开）。
 
 ### 修复
+- 修复查询字段包含 `url` 时 API 返回 `HTTP Error 400` 的问题：`url` 为工具自定义字段（由 `host`/`ip`/`port`/`protocol` 本地拼接），FOFA API 并不提供；现改为请求前剥离 `url`（`_api_fields`）并确保拼接所需字段存在，导出与去重仍按本地拼接逻辑输出。
 - 修复无图形环境自动打开浏览器报错刷屏：SSH 会话（检测 `SSH_CONNECTION`/`SSH_CLIENT`）与 Linux 无 DISPLAY 环境跳过自动打开并提示手动访问；WSL 环境改由 `explorer.exe` 调起 Windows 默认浏览器。此前裸 `webbrowser.open()` 在 WSL 会触发 `gio: Operation not supported`，在 SSH + X11 转发的服务器上会触发 X11 转发弹窗与 `xdg-open: no method available` 报错。
 - 修复虚拟滚动滚动条长度随滚动位置忽大忽小（向下滚到底部附近尤其明显）：撑高行 `<td>` 残留 CSS padding/border、撑高行/数据行角色切换时残留 `height`/`colSpan` 等内联样式，导致 `scrollHeight` 随窗口波动、浏览器钳制 `scrollTop`。
 - 修复虚拟滚动滚动时数据行内容闪动：原每帧 `innerHTML` 整体重建/按位置重映射导致所有可见行 `textContent` 被改写；改为按行号绑定的节点所有权映射，保持不变的行零 DOM 写入。
