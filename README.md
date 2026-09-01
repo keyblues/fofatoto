@@ -92,7 +92,8 @@ Web UI 提供三种模式：
 - **账户信息**：顶栏展示 VIP 状态、剩余查询、过期时间等，每 3 分钟自动刷新（页面隐藏时暂停）
 - **超长查询语句**：输入框聚焦时自动展开换行（浮起不挤动布局），失焦收起为单行，`Enter` 搜索、`Shift+Enter` 换行
 
-<img width="2160" height="1247" alt="Web UI 界面" src="https://github.com/user-attachments/assets/f2c4cd6a-c1f0-42ae-b165-5c33501339f7" />
+<img width="2160" height="1247" alt="image" src="https://github.com/user-attachments/assets/59df66e1-e4ea-453d-bde4-a3c826221e45" />
+
 
 ### CLI 基本用法
 
