@@ -14,7 +14,6 @@ import json
 import os
 import re
 import socket
-import socketserver
 import subprocess
 import sys
 import tempfile
@@ -23,15 +22,15 @@ import time
 import urllib.request
 import uuid
 import webbrowser
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 # ============ Banner ============
 
-APP_VERSION = "1.5.0"
+APP_VERSION = "1.6.0"
 GITHUB_URL = "https://github.com/keyblues/fofatoto"
 DEFAULT_CONFIG = {"url": "https://fofa.info", "key": "your-fofa-key-here"}
 DEFAULT_WEB_PORT = 17380
@@ -89,6 +88,22 @@ def highlight(text: str, value: str) -> str:
 
 
 # ============ Web UI 模板 ============
+
+# Web UI 字段选择器的字段分组（分类名 -> 字段列表），经 __FIELD_CATEGORIES_JSON__
+# 占位符注入前端。字段全集以 FofaResult 为准（KNOWN_FIELDS | CUSTOM_FIELDS），
+# 模块加载时 _validate_web_field_categories() 校验分组与之完全一致。
+WEB_FIELD_CATEGORIES: list[dict] = [
+    {"name": "核心", "fields": ["host", "ip", "port", "protocol", "domain"]},
+    {"name": "服务", "fields": ["title", "server", "product", "version"]},
+    {
+        "name": "位置",
+        "fields": ["country", "city", "region", "country_name", "latitude", "longitude"],
+    },
+    {"name": "网络", "fields": ["asn", "org", "base_protocol", "link", "url"]},
+    {"name": "证书", "fields": ["cert", "jarm", "icp", "cname", "header", "banner"]},
+    {"name": "时间", "fields": ["lastupdatetime"]},
+    {"name": "系统", "fields": ["os", "product_category"]},
+]
 
 WEB_HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -344,6 +359,7 @@ td{max-width:240px}
 <div class="options-row">
 <label>占位符:<input type="text" id="batchPlaceholder" value="{}" style="width:120px"></label>
 <label>覆盖率:<input type="number" id="batchFill" value="0.8" min="0.1" max="1.0" step="0.1"></label>
+<label>每目标上限:<input type="number" id="batchMaxSize" value="0" min="0" placeholder="0=不限制"></label>
 </div>
 <textarea class="batch-textarea" id="batchTargets" placeholder="在此粘贴目标，每行一个..."></textarea>
 </div>
@@ -388,15 +404,7 @@ td{max-width:240px}
 </div>
 </div>
 <script>
-var fieldCategories=[
-{name:"核心",fields:["host","ip","port","protocol","domain"]},
-{name:"服务",fields:["title","server","product","version"]},
-{name:"位置",fields:["country","city","region","country_name","latitude","longitude"]},
-{name:"网络",fields:["asn","org","base_protocol","link","url"]},
-{name:"证书",fields:["cert","jarm","icp","cname","header","banner"]},
-{name:"时间",fields:["lastupdatetime"]},
-{name:"系统",fields:["os","product_category"]}
-];
+var fieldCategories=__FIELD_CATEGORIES_JSON__;
 var allFields=[];fieldCategories.forEach(function(c){c.fields.forEach(function(f){allFields.push(f)})});
 var selectedFields=__DEFAULT_FIELDS_JSON__;
 var currentMode="instant",currentResults=[],currentColumns=[],currentView=[],rowHeight=0,OVERSCAN=10,previewRendered=false,exportTaskId=null,exportPollTimer=null,progressUiMode="overlay",sortColumn=null,sortAsc=true,historyActiveIndex=-1,historyVisibleItems=[],vsLastWindow=null;
@@ -416,25 +424,25 @@ function setupModeTabs(){document.querySelectorAll(".mode-tab").forEach(function
 function modeButtonText(){return currentMode==="instant"?"搜索":(currentMode==="export"?"导出":"批量查询")}
 function refreshModeButton(){var btn=document.getElementById("searchBtn");btn.textContent=modeButtonText();btn.className="btn btn-primary"}
 function switchMode(mode){if(exportPollTimer&&currentMode!==mode){showMessage("error","已有导出任务正在运行，请先取消或等待完成");return}currentMode=mode;document.querySelectorAll(".mode-tab").forEach(function(t){t.classList.toggle("active",t.dataset.mode===mode)});document.getElementById("instantOptions").style.display=mode==="instant"?"":"none";document.getElementById("exportOptions").style.display=mode==="export"?"":"none";document.getElementById("batchOptions").style.display=mode==="batch"?"":"none";if(!document.getElementById("searchBtn").disabled)refreshModeButton();clearMessage();updateLayout()}
-function syncModeContent(){var results=document.getElementById("resultsArea"),panel=document.getElementById("exportPanel");if(results)results.style.display=currentMode==="instant"&&previewRendered?"block":"none";if(panel)panel.style.display=currentMode==="export"&&panel.classList.contains("show")?"":"none"}
+function syncModeContent(){var results=document.getElementById("resultsArea"),panel=document.getElementById("exportPanel");if(results)results.style.display=currentMode==="instant"&&previewRendered?"block":"none";if(panel)panel.style.display=(currentMode==="export"||currentMode==="batch")&&panel.classList.contains("show")?"":"none"}
 function autoResizeQueryInput(){var el=document.getElementById("queryInput");if(!el)return;el.style.height="auto";var h=el.scrollHeight;var maxH=el===document.activeElement?Math.floor(window.innerHeight-160):200;el.style.height=Math.max(34,Math.min(h,maxH))+"px";var dd=document.getElementById("historyDropdown");if(dd&&dd.classList.contains("show")){dd.style.top=el.getBoundingClientRect().height+4+"px";fitHistoryDropdown()}updateLayout()}
 function setupSearchShortcut(){var input=document.getElementById("queryInput");input.addEventListener("focus",function(){renderHistorySuggestions(true);autoResizeQueryInput()});input.addEventListener("input",function(){renderHistorySuggestions(false);autoResizeQueryInput()});input.addEventListener("blur",function(){input.style.height="calc(1.5em + 18px)";var dd=document.getElementById("historyDropdown");if(dd)dd.style.top="";updateLayout()});input.addEventListener("keydown",function(e){var dd=document.getElementById("historyDropdown"),open=dd&&dd.classList.contains("show");if(e.key==="ArrowDown"){e.preventDefault();if(!open)renderHistorySuggestions(true);moveHistorySelection(1)}else if(e.key==="ArrowUp"){e.preventDefault();if(!open)renderHistorySuggestions(true);moveHistorySelection(-1)}else if(e.key==="Escape"){closeHistorySuggestions()}else if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();if(open&&historyActiveIndex>-1&&pickActiveHistory()){return}closeHistorySuggestions();executeSearch()}})}
 function showConfigNotice(d){var box=document.getElementById("configAlert");document.getElementById("configAlertTitle").textContent="未配置有效的 FOFA API Key";document.getElementById("configAlertText").textContent="请编辑下方配置文件，保存后刷新本页面。";document.getElementById("configPath").textContent=d.config_path||"";document.getElementById("configTemplate").textContent=d.config_template||"";box.classList.add("show")}
 function hideConfigNotice(){document.getElementById("configAlert").classList.remove("show")}
 function formatApiError(data,fallback){var msg=(data&&data.error)||fallback||"请求失败";if(data&&data.data&&data.data.configured===false&&data.data.config_path){msg+="。配置文件: "+data.data.config_path}return msg}
-function loadAccountInfo(silent){return fetch("/api/info").then(function(r){return r.json()}).then(function(data){var d=data.data||{};if(d.configured===false){showConfigNotice(d);document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">未配置</span> 等待 API Key';return}hideConfigNotice();if(data.success){if(d.relay){var vClass=d.isvip?"active":"inactive",vText=d.isvip?"有效":"无效";var h='<span class="vip-badge inactive">中转站</span> <span class="vip-badge '+vClass+'">'+vText+'</span> '+"剩余查询: <strong>"+(d.remain_api_query||"N/A")+"</strong>";if(d.today_remaining!==null&&d.today_remaining!==undefined)h+=" | 今日剩余: <strong>"+d.today_remaining+"</strong>";h+=" | 过期: "+(d.expiration||"N/A");document.getElementById("accountInfo").innerHTML=h}else{var vipClass=d.isvip?"active":"inactive",vipText=d.isvip?"VIP "+(d.vip_level||""):"未激活",serverText=d.server_ok?"正常":"异常",serverClass=d.server_ok?"ok":"fail";document.getElementById("accountInfo").innerHTML='<span class="vip-badge '+vipClass+'">'+vipText+'</span> 服务器: <span class="server-status '+serverClass+'">'+serverText+'</span> | 剩余查询: <strong>'+(d.remain_api_query||"N/A")+'</strong> | 过期: '+(d.expiration||"N/A");if(d.server_ok===false&&d.error&&!silent)showMessage("error",d.error)}}else{if(!silent){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 账户信息不可用';showMessage("error",formatApiError(data,"账户信息不可用"))}}}).catch(function(e){if(!silent){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 本地服务不可用';showMessage("error","网络错误: "+e.message)}}).finally(function(){updateLayout()})}
+function loadAccountInfo(silent){return fetch("/api/info").then(function(r){return r.json()}).then(function(data){var d=data.data||{};if(d.configured===false){showConfigNotice(d);document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">未配置</span> 等待 API Key';return}hideConfigNotice();if(data.success){if(d.relay){var vClass=d.isvip?"active":"inactive",vText=d.isvip?"有效":"无效";var h='<span class="vip-badge inactive">中转站</span> <span class="vip-badge '+vClass+'">'+vText+'</span> '+"剩余查询: <strong>"+escHtml(d.remain_api_query||"N/A")+"</strong>";if(d.today_remaining!==null&&d.today_remaining!==undefined)h+=" | 今日剩余: <strong>"+escHtml(d.today_remaining)+"</strong>";h+=" | 过期: "+escHtml(d.expiration||"N/A");document.getElementById("accountInfo").innerHTML=h}else{var vipClass=d.isvip?"active":"inactive",vipText=d.isvip?"VIP "+(d.vip_level||""):"未激活",serverText=d.server_ok?"正常":"异常",serverClass=d.server_ok?"ok":"fail";document.getElementById("accountInfo").innerHTML='<span class="vip-badge '+vipClass+'">'+escHtml(vipText)+'</span> 服务器: <span class="server-status '+serverClass+'">'+serverText+'</span> | 剩余查询: <strong>'+escHtml(d.remain_api_query||"N/A")+'</strong> | 过期: '+escHtml(d.expiration||"N/A");if(d.server_ok===false&&d.error&&!silent)showMessage("error",d.error)}}else{if(!silent){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 账户信息不可用';showMessage("error",formatApiError(data,"账户信息不可用"))}}}).catch(function(e){if(!silent){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 本地服务不可用';showMessage("error","网络错误: "+e.message)}}).finally(function(){updateLayout()})}
 function startAccountRefresh(){if(accountRefreshTimer)return;accountRefreshTimer=setInterval(function(){loadAccountInfo(true);lastAccountRefresh=Date.now()},ACCOUNT_REFRESH_INTERVAL)}
 function stopAccountRefresh(){if(accountRefreshTimer){clearInterval(accountRefreshTimer);accountRefreshTimer=null}}
 function onVisibilityChange(){if(document.hidden){stopAccountRefresh()}else{var elapsed=Date.now()-lastAccountRefresh;if(elapsed>=ACCOUNT_REFRESH_INTERVAL){loadAccountInfo(true);lastAccountRefresh=Date.now()}startAccountRefresh()}}
 function executeSearch(){var q=document.getElementById("queryInput").value.trim();if(!q)return;closeHistorySuggestions();addToHistory(q);if(currentMode==="instant")doInstantSearch(q);else if(currentMode==="export")doDeepExport(q);else doBatchSearch(q)}
 function doInstantSearch(query){var size=parseInt(document.getElementById("instantSize").value)||100,fields=getSelectedFields(),full=document.getElementById("instantFull").checked;clearResults();showMessage("info","搜索中...");fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:query,size:size,fields:fields,full:full})}).then(function(r){return r.json()}).then(function(data){clearMessage();if(data.success){currentResults=data.data.results||[];currentColumns=data.data.columns||[];var _sb=getScrollBox();if(_sb)_sb.scrollTop=0;renderResults(data.data)}else showMessage("error",formatApiError(data,"搜索失败"))}).catch(function(e){showMessage("error","网络错误: "+e.message)})}
 function doDeepExport(query){var fill=parseFloat(document.getElementById("exportFill").value),maxSize=parseInt(document.getElementById("exportMaxSize").value)||0,fields=getSelectedFields(),full=document.getElementById("exportFull").checked;if(isNaN(fill))fill=0.8;if(fill<=0||fill>1){showMessage("error","覆盖率必须在 0 到 1 之间");return}if(maxSize<0){showMessage("error","上限不能小于 0");return}if(exportPollTimer){showMessage("error","已有导出任务正在运行，请先取消或等待完成");return}progressUiMode="panel";exportTaskId=null;clearMessage();showExportPanelStart(query,fill,maxSize,full);setSearchBusy(true,"导出中...");fetch("/api/export",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:query,fill_percent:fill,max_size:maxSize,fields:fields,full:full})}).then(function(r){return r.json()}).then(function(data){if(data.success){exportTaskId=data.task_id;pollProgress()}else{setSearchBusy(false);showExportPanelError(formatApiError(data,"导出失败"))}}).catch(function(e){setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})}
-function doBatchSearch(baseQuery){var ph=document.getElementById("batchPlaceholder").value||"{}",targets=document.getElementById("batchTargets").value.trim(),fill=parseFloat(document.getElementById("batchFill").value)||0.8,fields=getSelectedFields();if(!targets){showMessage("error","请输入批量目标");return}if(baseQuery.indexOf(ph)===-1){showMessage("error","基础查询必须包含占位符: "+ph);return}if(exportPollTimer){showMessage("error","已有任务正在运行，请先取消或等待完成");return}var targetLines=targets.replace(/\r/g,"").split("\n").filter(function(l){return l.trim()});progressUiMode="panel";exportTaskId=null;clearMessage();showBatchPanelStart(baseQuery,targetLines.length,ph,fill);setSearchBusy(true,"批量查询中...");fetch("/api/batch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({base_query:baseQuery,targets:targetLines,placeholder:ph,fill_percent:fill,fields:fields})}).then(function(r){return r.json()}).then(function(data){if(data.success){exportTaskId=data.task_id;pollProgress()}else{setSearchBusy(false);showExportPanelError(formatApiError(data,"批量导出失败"))}}).catch(function(e){setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})}
+function doBatchSearch(baseQuery){var ph=document.getElementById("batchPlaceholder").value||"{}",targets=document.getElementById("batchTargets").value.trim(),fill=parseFloat(document.getElementById("batchFill").value)||0.8,maxSize=parseInt(document.getElementById("batchMaxSize").value)||0,fields=getSelectedFields();if(!targets){showMessage("error","请输入批量目标");return}if(baseQuery.indexOf(ph)===-1){showMessage("error","基础查询必须包含占位符: "+ph);return}if(maxSize<0){showMessage("error","每目标上限不能小于 0");return}if(exportPollTimer){showMessage("error","已有任务正在运行，请先取消或等待完成");return}var targetLines=targets.replace(/\r/g,"").split("\n").filter(function(l){return l.trim()});progressUiMode="panel";exportTaskId=null;clearMessage();showBatchPanelStart(baseQuery,targetLines.length,ph,fill,maxSize);setSearchBusy(true,"批量查询中...");fetch("/api/batch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({base_query:baseQuery,targets:targetLines,placeholder:ph,fill_percent:fill,max_size:maxSize,fields:fields})}).then(function(r){return r.json()}).then(function(data){if(data.success){exportTaskId=data.task_id;pollProgress()}else{setSearchBusy(false);showExportPanelError(formatApiError(data,"批量导出失败"))}}).catch(function(e){setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})}
 function renderProgressDetails(d,pct){if(d.kind==="batch"){var current=d.current_target||0,total=d.total_targets||0,curFetched=d.current_fetched||0,curTotal=d.current_target_count||d.current_total_estimated||0;return "进度: <span>"+pct+"%</span><br>目标: <span>"+current+"</span> / "+total+" | 当前: <span>"+curFetched.toLocaleString()+"</span> / ~"+curTotal.toLocaleString()+"<br>累计结果: <span>"+(d.fetched||0).toLocaleString()+"</span> | 失败: <span>"+(d.failed_count||0).toLocaleString()+"</span>"}var target=d.target_count||d.total_estimated||0;return "进度: <span>"+pct+"%</span><br>已获取: <span>"+(d.fetched||0).toLocaleString()+"</span> / ~"+target.toLocaleString()+"<br>总匹配: <span>"+(d.total_estimated||0).toLocaleString()+"</span> | 独立IP: <span>"+(d.unique_ips||0).toLocaleString()+"</span> | 配额: <span>"+(d.total_quota_used||0).toLocaleString()+"</span>"}
 function exportMetaItem(label,value){return '<div class="export-meta-item"><span class="export-meta-label">'+escHtml(label)+'</span><span class="export-meta-value">'+escHtml(value)+'</span></div>'}
 function exportTarget(d){return d.target_count||d.total_estimated||0}
 function showExportPanelStart(query,fill,maxSize,full){document.getElementById("exportPanel").classList.add("show");document.getElementById("exportPanelTitle").textContent="深度导出";document.getElementById("exportPanelState").textContent="启动中";document.getElementById("exportPanelFill").style.width="0%";document.getElementById("exportPanelMessage").textContent="正在创建导出任务，完成后可下载 CSV / JSON / TXT。";document.getElementById("exportPanelMeta").innerHTML=exportMetaItem("查询",query)+exportMetaItem("覆盖率",Math.round(fill*100)+"%")+exportMetaItem("上限",maxSize>0?maxSize.toLocaleString():"不限制")+exportMetaItem("数据范围",full?"全部数据":"基础字段");document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-secondary" onclick="cancelExport()">取消</button>';updateLayout()}
-function showBatchPanelStart(baseQuery,targetCount,placeholder,fill){document.getElementById("exportPanel").classList.add("show");document.getElementById("exportPanelTitle").textContent="批量查询";document.getElementById("exportPanelState").textContent="启动中";document.getElementById("exportPanelFill").style.width="0%";document.getElementById("exportPanelMessage").textContent="正在创建批量查询任务，完成后可下载 CSV / JSON / TXT。";document.getElementById("exportPanelMeta").innerHTML=exportMetaItem("基础查询",baseQuery)+exportMetaItem("占位符",placeholder)+exportMetaItem("目标数",targetCount.toLocaleString())+exportMetaItem("覆盖率",Math.round(fill*100)+"%");document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-secondary" onclick="cancelExport()">取消</button>';updateLayout()}
+function showBatchPanelStart(baseQuery,targetCount,placeholder,fill,maxSize){document.getElementById("exportPanel").classList.add("show");document.getElementById("exportPanelTitle").textContent="批量查询";document.getElementById("exportPanelState").textContent="启动中";document.getElementById("exportPanelFill").style.width="0%";document.getElementById("exportPanelMessage").textContent="正在创建批量查询任务，完成后可下载 CSV / JSON / TXT。";document.getElementById("exportPanelMeta").innerHTML=exportMetaItem("基础查询",baseQuery)+exportMetaItem("占位符",placeholder)+exportMetaItem("目标数",targetCount.toLocaleString())+exportMetaItem("覆盖率",Math.round(fill*100)+"%")+exportMetaItem("每目标上限",maxSize>0?maxSize.toLocaleString():"不限制");document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-secondary" onclick="cancelExport()">取消</button>';updateLayout()}
 function showExportPanelError(message){document.getElementById("exportPanel").classList.add("show");document.getElementById("exportPanelState").textContent="失败";document.getElementById("exportPanelMessage").innerHTML='<span style="color:#dc2626">'+escHtml(message)+"</span>";document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-secondary" onclick="hideExportPanel()">关闭</button>';updateLayout()}
 function updateExportPanel(d,pct){var target=exportTarget(d),fetched=d.fetched||0,elapsed=d.elapsed_seconds?d.elapsed_seconds+" 秒":"刚开始";document.getElementById("exportPanel").classList.add("show");document.getElementById("exportPanelFill").style.width=pct+"%";document.getElementById("exportPanelState").textContent=d.status==="done"?(d.partial?"部分完成":"完成"):(d.status==="error"?"失败":pct+"%");document.getElementById("exportPanelMessage").textContent=d.status==="done"?(d.partial?("部分导出完成，已保留 "+fetched.toLocaleString()+" 条可用结果。"):"导出文件已生成，可选择格式下载。"):(d.message||(d.kind==="batch"?"正在批量查询...":"正在按时间游标分批拉取 FOFA 数据..."));document.getElementById("exportPanelMeta").innerHTML=d.kind==="batch"?exportMetaItem("目标",(d.current_target||0)+" / "+(d.total_targets||0))+exportMetaItem("当前",(d.current_fetched||0).toLocaleString()+" / ~"+(d.current_target_count||d.current_total_estimated||0).toLocaleString())+exportMetaItem("累计",(d.fetched||0).toLocaleString())+exportMetaItem("失败",(d.failed_count||0).toLocaleString())+exportMetaItem("耗时",elapsed):exportMetaItem("已获取",fetched.toLocaleString())+exportMetaItem("目标",target?("~"+target.toLocaleString()):"估算中")+exportMetaItem("总匹配",((d.total_estimated||0).toLocaleString()))+exportMetaItem("独立 IP",((d.unique_ips||0).toLocaleString()))+exportMetaItem("配额",((d.total_quota_used||0).toLocaleString()))+exportMetaItem("耗时",elapsed);if(d.status==="done"){document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-primary" onclick="downloadExport(\'csv\')">下载 CSV</button><button class="btn btn-secondary" onclick="downloadExport(\'json\')">下载 JSON</button><button class="btn btn-secondary" onclick="downloadExport(\'txt\')">下载 TXT</button><button class="btn btn-secondary" onclick="hideExportPanel()">收起</button>'}else if(d.status==="error"){document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-secondary" onclick="hideExportPanel()">关闭</button>';document.getElementById("exportPanelMessage").innerHTML='<span style="color:#dc2626">'+escHtml(d.error||"未知错误")+"</span>"}else{document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-secondary" onclick="cancelExport()">取消</button>'}updateLayout()}
 function hideExportPanel(){document.getElementById("exportPanel").classList.remove("show");updateLayout()}
@@ -443,11 +451,11 @@ function pollProgress(){if(!exportTaskId)return;if(exportPollTimer)clearInterval
 function cancelExport(){if(exportTaskId)document.getElementById("cancelOverlay").classList.add("show")}
 function confirmCancel(save){if(!exportTaskId)return;document.getElementById("cancelOverlay").classList.remove("show");var discard=save?"0":"1";if(progressUiMode==="panel"){document.getElementById("exportPanelState").textContent="取消中";document.getElementById("exportPanelActions").innerHTML="";document.getElementById("exportPanelMessage").textContent="取消请求已发送，正在等待当前请求结束..."}else{document.getElementById("progressTitle").textContent="正在取消";document.getElementById("progressActions").innerHTML="";document.getElementById("progressDetails").innerHTML="取消请求已发送，正在等待当前请求结束..."}fetch("/api/progress/cancel?task_id="+exportTaskId+"&discard="+discard,{method:"POST"})}
 function hideCancelConfirm(){document.getElementById("cancelOverlay").classList.remove("show")}
-function downloadExport(format){if(exportTaskId)window.open("/api/export/download?task_id="+exportTaskId+"&format="+format,"_blank")}
+function downloadExport(format){if(!exportTaskId)return;fetch("/api/export/download?task_id="+exportTaskId+"&format="+format).then(function(r){if(!r.ok)return r.json().then(function(j){throw new Error(j.error||("HTTP "+r.status))});var cd=r.headers.get("Content-Disposition")||"",m=cd.match(/filename="([^"]*)"/),name=m&&m[1]?m[1]:("fofa_export."+format);return r.blob().then(function(b){var u=URL.createObjectURL(b),a=document.createElement("a");a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(u)},1000)})}).catch(function(e){showMessage("error","下载失败: "+e.message)})}
 function showOverlay(title){document.getElementById("progressTitle").textContent=title;document.getElementById("progressFill").style.width="0%";document.getElementById("progressDetails").innerHTML="初始化中...";document.getElementById("progressActions").innerHTML='<button class="btn btn-secondary" onclick="cancelExport()">取消</button>';document.getElementById("progressOverlay").classList.add("show")}
 function hideOverlay(){document.getElementById("progressOverlay").classList.remove("show")}
 function renderResults(data){var area=document.getElementById("resultsArea"),rows=data.results||[],table=document.getElementById("resultsTable"),empty=document.getElementById("emptyState");previewRendered=true;syncModeContent();var pickBtns='<button class="mini-btn" id="pickFilterBtn" onclick="enterPickMode(\'filter\')">不看</button><button class="mini-btn" id="pickQueryBtn" onclick="enterPickMode(\'query\')">选取查询</button>';var actions=rows.length>0?'<div class="stats-actions"><span class="preview-status" id="previewStatus"></span>'+pickBtns+'<button class="mini-btn" onclick="exportPreview(&quot;csv&quot;)">导出 CSV</button><button class="mini-btn" onclick="exportPreview(&quot;json&quot;)">JSON</button><button class="mini-btn" onclick="exportPreview(&quot;txt&quot;)">TXT</button></div>':"";document.getElementById("statsBar").innerHTML='<div class="stats-metrics"><span class="stat-item"><span class="stat-dot" style="background:var(--accent)"></span>总计: <span class="stat-value">'+(data.total||0).toLocaleString()+'</span></span><span class="stat-item"><span class="stat-dot" style="background:var(--success)"></span>独立IP: <span class="stat-value">'+(data.unique_ips||0).toLocaleString()+'</span></span><span class="stat-item"><span class="stat-dot" style="background:var(--warning)"></span>结果: <span class="stat-value">'+rows.length.toLocaleString()+'</span></span></div>'+actions;var cols=data.columns||[];if(cols.length===0&&rows.length>0)cols=Object.keys(rows[0]);currentColumns=cols;if(rows.length===0){table.style.display="none";empty.style.display="block";empty.textContent=excludedFilters.length?"所有结果已被「不看」排除，移除排除项可恢复显示。":((data.total||0)>0?"当前预览没有返回记录，可调大数量或更换字段后重试。":"没有匹配结果。");document.querySelector("#resultsTable thead").innerHTML="";document.querySelector("#resultsTable tbody").innerHTML="";updateLayout();return}table.style.display="table";empty.style.display="none";var thead="";cols.forEach(function(col){var sc=sortColumn===col?" sorted":"";thead+="<th class=\""+sc+"\" onclick=\"sortBy('"+escHtml(col)+"')\">"+(sortColumn===col?(sortAsc?"▲ ":"▼ "):"")+escHtml(col)+"</th>"});document.querySelector("#resultsTable thead").innerHTML="<tr>"+thead+"</tr>";currentView=rows;vsLastWindow=null;stabilizeColumnWidths();setupVirtualScroll();updateLayout();renderVirtual()}
-function buildRowsHtml(pageRows,cols){var html="";pageRows.forEach(function(row){html+="<tr>";cols.forEach(function(col){var val=row[col]!==undefined?row[col]:"",cls=(col==="ip"||col==="port"||col==="host")?" mono":"";if((col==="host"||col==="url")&&val){var url=val.indexOf("http")===0?val:"http://"+val;html+='<td class="'+cls+'"><a href="'+escHtml(url)+'" target="_blank" rel="noopener">'+escHtml(val)+"</a></td>"}else html+='<td class="'+cls+'" title="'+escHtml(val)+'">'+escHtml(val)+"</td>"});html+="</tr>"});return html}
+function buildRowsHtml(pageRows,cols){var html="";pageRows.forEach(function(row){html+="<tr>";cols.forEach(function(col){var val=row[col]!==undefined?row[col]:"",cls=(col==="ip"||col==="port"||col==="host")?" mono":"";if((col==="host"||col==="url")&&val){var url=val.indexOf("http")===0?val:"http://"+val;html+='<td class="'+escAttr(cls)+'"><a href="'+escAttr(url)+'" target="_blank" rel="noopener">'+escHtml(val)+"</a></td>"}else html+='<td class="'+escAttr(cls)+'" title="'+escAttr(val)+'">'+escHtml(val)+"</td>"});html+="</tr>"});return html}
 function getScrollBox(){return document.getElementById("resultsTable").parentElement}
 function measureRowHeight(){var cols=currentColumns,probe=currentView[0]||{},tbody=document.querySelector("#resultsTable tbody");var n=Math.min(8,currentView.length||1),rows=[];for(var k=0;k<n;k++)rows.push(probe);tbody.innerHTML=buildRowsHtml(rows,cols);vsLastWindow=null;var h=tbody.offsetHeight;return h>0?h/n:31}
 var colWidthsRef=null;var fitToWindow=true;function toggleFitToWindow(el){fitToWindow=el.checked;colWidthsRef=null;stabilizeColumnWidths();renderVirtual()}function stabilizeColumnWidths(){var table=document.getElementById("resultsTable");var oldCg=table.querySelector("colgroup");if(colWidthsRef===currentResults&&oldCg)return;colWidthsRef=currentResults;var cols=currentColumns;if(oldCg)oldCg.remove();if(!cols.length||!currentResults.length){table.style.tableLayout="";table.style.width="";return}var tbody=document.querySelector("#resultsTable tbody");var probeRows=currentResults.slice(0,Math.min(100,currentResults.length));tbody.innerHTML=buildRowsHtml(probeRows,cols);var firstRow=tbody.querySelector("tr");if(!firstRow){table.style.tableLayout="";table.style.width="";return}table.style.width="auto";table.style.tableLayout="auto";var stackH=tbody.offsetHeight;if(stackH>0&&probeRows.length>1){var eff=stackH/probeRows.length;if(eff>0)rowHeight=eff}else{var h=firstRow.offsetHeight;if(h>0)rowHeight=h}var widths=[];firstRow.querySelectorAll("td").forEach(function(td){widths.push(td.offsetWidth)});table.style.width="";var cg=document.createElement("colgroup");if(fitToWindow){var total=0;widths.forEach(function(w){total+=w});cols.forEach(function(col,i){var el=document.createElement("col");var w=widths[i]||100;el.style.width=total>0?((w/total)*100).toFixed(3)+"%":w+"px";cg.appendChild(el)})}else{cols.forEach(function(col,i){var el=document.createElement("col");el.style.width=(widths[i]||100)+"px";cg.appendChild(el)})}table.insertBefore(cg,table.firstChild);table.style.tableLayout="fixed";vsLastWindow=null}
@@ -462,7 +470,8 @@ function previewUrl(row){var val=row.url||row.link||row.host||"";if(!val&&row.ip
 function downloadPreviewBlob(content,filename,type){var blob=new Blob([content],{type:type}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url)},1000)}
 function showPreviewStatus(text){var el=document.getElementById("previewStatus");if(el){el.textContent=text;updateLayout()}else showMessage("info",text)}
 function exportPreview(format){if(!currentResults.length){showMessage("error","当前预览没有可导出的结果");return}var cols=previewColumns(),rows=previewRows(),ts=previewTimestamp(),content="",filename="fofatoto_preview_"+ts+"."+format,type="text/plain;charset=utf-8";var src=currentResults;if(excludedFilters.length){src=src.filter(function(r){return !excludedFilters.some(function(f){return String(r[f.field]||"")===String(f.value)})})}var exportedCount=0;if(format==="csv"){content="\ufeff"+[cols.map(csvCell).join(",")].concat(rows.map(function(row){return cols.map(function(col){return csvCell(row[col])}).join(",")})).join("\r\n")+"\r\n";type="text/csv;charset=utf-8";exportedCount=rows.length}else if(format==="json"){content=JSON.stringify(rows,null,2)+"\n";type="application/json;charset=utf-8";exportedCount=rows.length}else{var values;if(cols.length===1&&cols[0]==="ip")values=src.map(function(row){return row.ip||""});else if(cols.length===1&&cols[0]==="domain")values=src.map(function(row){return row.domain||""});else values=src.map(previewUrl);values=values.filter(function(v){return v});exportedCount=values.length;content=values.join("\n")+"\n"}downloadPreviewBlob(content,filename,type);clearMessage();showPreviewStatus("已导出 "+exportedCount.toLocaleString()+" 条")}
-function sortBy(col){if(sortColumn===col){sortAsc=!sortAsc}else{sortColumn=col;sortAsc=true}currentResults.sort(function(a,b){var va=a[col]||"",vb=b[col]||"";if(va<vb)return sortAsc?-1:1;if(va>vb)return sortAsc?1:-1;return 0});renderCurrentView()}
+function sortValueCompare(a,b){var na=Number(a),nb=Number(b);if(a!==""&&b!==""&&!isNaN(na)&&!isNaN(nb))return na<nb?-1:(na>nb?1:0);return a<b?-1:(a>b?1:0)}
+function sortBy(col){if(sortColumn===col){sortAsc=!sortAsc}else{sortColumn=col;sortAsc=true}currentResults.sort(function(a,b){var r=sortValueCompare(a[col]||"",b[col]||"");return sortAsc?r:-r});renderCurrentView()}
 var pickModeActive=false,pickModeAction="query",excludedFilters=[];
 function enterPickMode(mode){if(!currentResults.length){showMessage("error","当前预览没有可选取的结果");return}if(pickModeActive)return;pickModeActive=true;pickModeAction=mode;var t=document.getElementById("resultsTable");t.classList.add("picking");var bId=mode==="filter"?"pickFilterBtn":"pickQueryBtn",b=document.getElementById(bId);if(b)b.classList.add("pick-active");t.addEventListener("click",pickTableClick,true);document.addEventListener("keydown",pickKeyHandler);showPreviewStatus(mode==="filter"?"不看：点击单元格排除该值，Esc 取消":"加入查询：点击单元格选取值加入查询，Esc 取消")}
 function exitPickMode(){if(!pickModeActive)return;pickModeActive=false;var t=document.getElementById("resultsTable");if(t){t.classList.remove("picking");t.removeEventListener("click",pickTableClick,true)}["pickFilterBtn","pickQueryBtn"].forEach(function(id){var b=document.getElementById(id);if(b)b.classList.remove("pick-active")});document.removeEventListener("keydown",pickKeyHandler);showPreviewStatus(excludedFilters.length?("已排除 "+excludedFilters.length+" 项"):"")}
@@ -489,7 +498,7 @@ function toggleShowHistory(el){setShowHistory(el.checked);if(!el.checked)closeHi
 function addToHistory(query){try{var history=getHistory();history=history.filter(function(h){return h.query!==query});history.unshift({query:query,mode:currentMode,time:Date.now()});if(history.length>50)history=history.slice(0,50);saveHistory(history);updateHistoryCount()}catch(e){}}
 function updateHistoryCount(){var el=document.getElementById("historyCount");if(el)el.textContent=getHistory().length}
 function fitHistoryDropdown(){var dd=document.getElementById("historyDropdown");if(!dd||!dd.classList.contains("show"))return;var rect=dd.getBoundingClientRect(),minH=window.innerHeight<520?120:160,maxH=Math.max(minH,shellBottom()-rect.top-12);dd.style.maxHeight=Math.min(320,maxH)+"px"}
-function renderHistorySuggestions(showAll){var dd=document.getElementById("historyDropdown"),input=document.getElementById("queryInput");if(!dd||!input)return false;if(!getShowHistory())return false;var q=showAll?"":input.value.trim().toLowerCase(),history=getHistory(),items=[];history.forEach(function(h,i){if(!q||String(h.query||"").toLowerCase().indexOf(q)>-1)items.push({item:h,index:i})});historyVisibleItems=items.slice(0,20);historyActiveIndex=-1;if(!historyVisibleItems.length){closeHistorySuggestions();return false}var html="";historyVisibleItems.forEach(function(entry){var h=entry.item,ml=h.mode==="instant"?"即":(h.mode==="export"?"深":"批");html+='<div class="history-item" data-history-index="'+entry.index+'" onclick="insertHistory('+entry.index+')"><span class="query-text" title="'+escHtml(h.query)+'">['+ml+"] "+escHtml(h.query)+'</span><span class="history-actions"><button class="h-act del" onclick="event.stopPropagation();deleteHistory('+entry.index+')">删除</button></span></div>'});dd.innerHTML=html;dd.classList.add("show");fitHistoryDropdown();return true}
+function renderHistorySuggestions(showAll){var dd=document.getElementById("historyDropdown"),input=document.getElementById("queryInput");if(!dd||!input)return false;if(!getShowHistory())return false;var q=showAll?"":input.value.trim().toLowerCase(),history=getHistory(),items=[];history.forEach(function(h,i){if(!q||String(h.query||"").toLowerCase().indexOf(q)>-1)items.push({item:h,index:i})});historyVisibleItems=items.slice(0,20);historyActiveIndex=-1;if(!historyVisibleItems.length){closeHistorySuggestions();return false}var html="";historyVisibleItems.forEach(function(entry){var h=entry.item,ml=h.mode==="instant"?"即":(h.mode==="export"?"深":"批");html+='<div class="history-item" data-history-index="'+entry.index+'" onclick="insertHistory('+entry.index+')"><span class="query-text" title="'+escAttr(h.query)+'">['+ml+"] "+escHtml(h.query)+'</span><span class="history-actions"><button class="h-act del" onclick="event.stopPropagation();deleteHistory('+entry.index+')">删除</button></span></div>'});dd.innerHTML=html;dd.classList.add("show");fitHistoryDropdown();return true}
 function closeHistorySuggestions(){var dd=document.getElementById("historyDropdown");if(dd){dd.classList.remove("show");dd.style.maxHeight="";dd.innerHTML=""}historyActiveIndex=-1;historyVisibleItems=[]}
 function moveHistorySelection(step){if(!historyVisibleItems.length)return;historyActiveIndex=(historyActiveIndex+step+historyVisibleItems.length)%historyVisibleItems.length;document.querySelectorAll("#historyDropdown .history-item").forEach(function(el,i){el.classList.toggle("active",i===historyActiveIndex);if(i===historyActiveIndex)el.scrollIntoView({block:"nearest"})})}
 function pickActiveHistory(){if(historyActiveIndex<0||!historyVisibleItems[historyActiveIndex])return false;insertHistory(historyVisibleItems[historyActiveIndex].index);return true}
@@ -498,6 +507,7 @@ function insertHistory(index){try{var history=getHistory();if(history[index]){do
 function deleteHistory(index){try{var history=getHistory();history.splice(index,1);saveHistory(history);updateHistoryCount();renderHistorySuggestions()}catch(e){}}
 document.addEventListener("click",function(e){if(!e.target.closest(".search-input-wrap"))closeHistorySuggestions();if(!e.target.closest(".settings-wrap"))document.getElementById("settingsPopup").classList.remove("show")});
 function escHtml(str){var div=document.createElement("div");div.appendChild(document.createTextNode(str));return div.innerHTML}
+function escAttr(str){return escHtml(str).replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 </script>
 </body>
 </html>"""
@@ -507,6 +517,10 @@ def render_web_html() -> str:
     return (
         WEB_HTML_TEMPLATE.replace("__APP_VERSION__", APP_VERSION)
         .replace("__GITHUB_URL__", GITHUB_URL)
+        .replace(
+            "__FIELD_CATEGORIES_JSON__",
+            json.dumps(WEB_FIELD_CATEGORIES, ensure_ascii=False),
+        )
         .replace(
             "__DEFAULT_FIELDS_JSON__",
             json.dumps(DEFAULT_FIELD_LIST, ensure_ascii=False),
@@ -579,7 +593,11 @@ class ConfigManager:
 
     def is_valid(self) -> bool:
         """验证配置是否有效"""
-        placeholder_keys = {DEFAULT_CONFIG["key"], "your-api-key"}
+        placeholder_keys = {
+            DEFAULT_CONFIG["key"],
+            "your-api-key",
+            "your_fofa_api_key_here",
+        }
         return bool(self.url and self.key and self.key not in placeholder_keys)
 
     def public_status(self) -> dict:
@@ -655,7 +673,9 @@ class FofaResult:
     _extra: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
-        result = asdict(self)
+        # 浅拷贝即可（字段均为 str/dict，后续不改写 _extra 本身），
+        # 避免 asdict() 递归深拷贝拖慢大批量导出
+        result = dict(self.__dict__)
         result.update(self._extra)
         for key in list(result.keys()):
             if key.startswith("_"):
@@ -664,6 +684,37 @@ class FofaResult:
             if result[key] == "" and key not in self._extra:
                 del result[key]
         return result
+
+
+# ============ 字段清单（单一来源） ============
+
+# 全部已知 FOFA 字段，顺序同 FofaResult 声明序（决定默认导出列序）。
+# 新增 FOFA 字段时只需两处：FofaResult 加字段 + WEB_FIELD_CATEGORIES 归类，
+# 模块加载时校验两份清单一致，其余引用方（API 解析/导出/Web UI）自动生效。
+ALL_FIELD_NAMES: list[str] = [
+    name for name in FofaResult.__dataclass_fields__ if name != "_extra"
+]
+# search() 解析 API 返回时的已知字段快速判断
+KNOWN_FIELDS: frozenset[str] = frozenset(ALL_FIELD_NAMES)
+# 本地自定义字段：FOFA API 不提供，url 由 host/ip/port/protocol 本地拼接
+CUSTOM_FIELDS: frozenset[str] = frozenset({"url"})
+
+
+def _validate_web_field_categories() -> None:
+    """校验 Web 字段分组与字段全集一一对应，防止多处清单漂移。"""
+    listed = [f for cat in WEB_FIELD_CATEGORIES for f in cat["fields"]]
+    expected = KNOWN_FIELDS | CUSTOM_FIELDS
+    if len(listed) != len(set(listed)) or set(listed) != expected:
+        missing = sorted(expected - set(listed))
+        extra = sorted(set(listed) - expected)
+        duplicated = sorted({f for f in listed if listed.count(f) > 1})
+        raise ValueError(
+            "WEB_FIELD_CATEGORIES 与 FofaResult 字段全集不一致："
+            f"缺失={missing} 多余={extra} 重复={duplicated}"
+        )
+
+
+_validate_web_field_categories()
 
 
 @dataclass
@@ -702,6 +753,27 @@ def _retry_sleep_seconds(error: Exception, attempt: int) -> int:
     if _is_retryable_api_error(str(error)):
         return min(10 * attempt, 30)
     return min(2 * attempt, 8)
+
+
+def _sleep_interruptible(
+    seconds: float, cancel_check: Optional[Callable[[], bool]] = None
+) -> None:
+    """分片休眠并周期检查取消标志，取消时抛 KeyboardInterrupt 立即中断。
+
+    FOFA 限流休眠最长 60s、重试退避最长 30s，整段 time.sleep 会让
+    Web UI 的「取消导出」等到休眠结束才生效。
+    """
+    if cancel_check is None:
+        time.sleep(seconds)
+        return
+    deadline = time.monotonic() + seconds
+    while True:
+        if cancel_check():
+            raise KeyboardInterrupt()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(0.25, remaining))
 
 
 def _field_names(fields: str) -> list[str]:
@@ -753,7 +825,9 @@ def _detect_relay_info_api(base_url: str, key: str) -> str:
         return ""
     for domain, template in RELAY_INFO_APIS.items():
         if host == domain or host.endswith("." + domain):
-            return template.replace("{base_url}", base_url.rstrip("/")).replace("{key}", key)
+            return template.replace("{base_url}", base_url.rstrip("/")).replace(
+                "{key}", quote(key, safe="")
+            )
     return ""
 
 
@@ -777,7 +851,7 @@ class FofaClient:
         """
         if self.info_api:
             return self._get_usage_relay()
-        api_url = f"{self.base_url}/api/v1/info/my?key={self.key}"
+        api_url = f"{self.base_url}/api/v1/info/my?key={quote(self.key, safe='')}"
         try:
             resp = urllib.request.urlopen(api_url, timeout=10)
             data = json.loads(resp.read().decode())
@@ -817,6 +891,7 @@ class FofaClient:
         full: bool = False,
         max_retries: int = 3,
         retry_callback: Optional[Callable[[int, int, Exception], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> SearchStats:
         """
         执行 FOFA 查询
@@ -827,6 +902,9 @@ class FofaClient:
             page: 页码（默认为1）
             fields: 返回字段，默认为 DEFAULT_FIELDS
             full: 是否搜索全部数据（不止一年）
+            max_retries: 失败重试次数
+            retry_callback: 重试回调
+            cancel_check: 取消检查函数，返回 True 时抛 KeyboardInterrupt 中断
 
         Returns:
             SearchStats 对象，包含结果列表、总匹配数和独立 IP 数
@@ -837,10 +915,13 @@ class FofaClient:
             fields = _api_fields(fields)
 
         qbase64 = base64.b64encode(query.encode()).decode()
+        # 参数一律 URL 编码：base64 字母表含 '+'，未编码时可能被服务端
+        # 按表单规则解码为空格，导致查询语句被破坏
         url = (
             f"{self.base_url}/api/v1/search/all"
-            f"?key={self.key}"
-            f"&qbase64={qbase64}&size={size}&page={page}&fields={fields}"
+            f"?key={quote(self.key, safe='')}"
+            f"&qbase64={quote(qbase64, safe='')}"
+            f"&size={size}&page={page}&fields={quote(fields, safe='')}"
         )
         if full:
             url += "&full=true"
@@ -856,7 +937,7 @@ class FofaClient:
                     raise FofaAPIError(f"请求失败: {err_msg}")
                 if retry_callback:
                     retry_callback(attempt, max_retries, e)
-                time.sleep(_retry_sleep_seconds(e, attempt))
+                _sleep_interruptible(_retry_sleep_seconds(e, attempt), cancel_check)
                 continue
 
             if data.get("error"):
@@ -865,58 +946,16 @@ class FofaClient:
                 if attempt < max_retries and _is_retryable_api_error(errmsg):
                     if retry_callback:
                         retry_callback(attempt, max_retries, api_error)
-                    time.sleep(_retry_sleep_seconds(api_error, attempt))
+                    _sleep_interruptible(
+                        _retry_sleep_seconds(api_error, attempt), cancel_check
+                    )
                     continue
                 raise api_error
 
             break
 
         results = []
-        fields_list = (
-            [f.strip() for f in fields.split(",")]
-            if fields
-            else [
-                "host",
-                "ip",
-                "port",
-                "protocol",
-                "domain",
-                "title",
-                "server",
-                "country",
-                "city",
-            ]
-        )
-        known_fields = {
-            "host",
-            "ip",
-            "port",
-            "protocol",
-            "domain",
-            "title",
-            "server",
-            "country",
-            "city",
-            "lastupdatetime",
-            "asn",
-            "org",
-            "os",
-            "icp",
-            "jarm",
-            "header",
-            "banner",
-            "cert",
-            "product",
-            "product_category",
-            "version",
-            "cname",
-            "latitude",
-            "longitude",
-            "region",
-            "country_name",
-            "base_protocol",
-            "link",
-        }
+        fields_list = _field_names(fields) or list(DEFAULT_FIELD_LIST)
         unique_ips = set()
         for item in data.get("results", []):
             if isinstance(item, str):
@@ -925,7 +964,7 @@ class FofaClient:
             result._extra = {}
             for i, field in enumerate(fields_list):
                 value = item[i] if len(item) > i else ""
-                if field in known_fields:
+                if field in KNOWN_FIELDS:
                     setattr(result, field, value)
                 else:
                     result._extra[field] = value
@@ -947,6 +986,7 @@ class FofaClient:
         api_rate_limit: float = 5.0,
         full: bool = False,
         progress_callback: Optional[callable] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> SearchStats:
         """
         多次查询所有结果：使用 before 递进策略
@@ -965,6 +1005,7 @@ class FofaClient:
             api_rate_limit: API 频率限制（秒），默认 5 秒
             full: 是否搜索全部数据
             progress_callback: 进度回调函数，用于解耦控制台输出
+            cancel_check: 取消检查函数，返回 True 时抛 KeyboardInterrupt 中断
 
         Returns:
             SearchStats 对象
@@ -1020,11 +1061,12 @@ class FofaClient:
             fields=fields,
             full=full,
             retry_callback=adaptive_retry_callback("count"),
+            cancel_check=cancel_check,
         )
         total_quota_used += 1
         total_estimated = count_stats.total
 
-        time.sleep(current_rate_limit)
+        _sleep_interruptible(current_rate_limit, cancel_check)
 
         if total_estimated == 0:
             trigger_cb("no_match")
@@ -1066,6 +1108,8 @@ class FofaClient:
 
         try:
             while True:
+                if cancel_check and cancel_check():
+                    raise KeyboardInterrupt()
                 remaining = target_count - len(all_results)
                 if remaining <= 0:
                     break
@@ -1085,6 +1129,7 @@ class FofaClient:
                         fields=fields,
                         full=full,
                         retry_callback=adaptive_retry_callback("batch", batch_num + 1),
+                        cancel_check=cancel_check,
                     )
                 except FofaAPIError as e:
                     if all_results:
@@ -1163,7 +1208,7 @@ class FofaClient:
                 else:
                     break
 
-                time.sleep(current_rate_limit)
+                _sleep_interruptible(current_rate_limit, cancel_check)
 
                 if max_size > 0 and len(all_results) >= max_size:
                     break
@@ -1266,20 +1311,15 @@ def dedup_results(
     for r in results:
         key_tuple = []
         for f in dedup_fields:
-            if hasattr(r, f):
-                key_tuple.append(getattr(r, f, "") or "")
-            elif f == "host":
-                key_tuple.append(r.host or "")
-            elif f == "ip":
-                key_tuple.append(r.ip or "")
-            elif f == "port":
-                key_tuple.append(r.port or "")
-            elif f == "domain":
-                key_tuple.append(r.domain or "")
-            elif f == "protocol":
-                key_tuple.append(r.protocol or "")
-            elif f == "url":
+            if f == "url":
                 key_tuple.append(build_url(r) or "")
+            elif f in KNOWN_FIELDS:
+                key_tuple.append(getattr(r, f, "") or "")
+            else:
+                # 不在 FofaResult 上的字段（如 fid）只存在于 _extra。
+                # 取值必须参与分组，否则按该字段去重会把所有行并成一组。
+                extra = r._extra.get(f, "")
+                key_tuple.append(extra if isinstance(extra, str) else str(extra or ""))
         key = tuple(key_tuple)
         if key not in seen:
             seen.add(key)
@@ -1290,36 +1330,7 @@ def dedup_results(
 class Exporter:
     """导出管理器"""
 
-    BASE_FIELDS = [
-        "host",
-        "ip",
-        "port",
-        "protocol",
-        "domain",
-        "title",
-        "server",
-        "country",
-        "city",
-        "lastupdatetime",
-        "asn",
-        "org",
-        "os",
-        "icp",
-        "jarm",
-        "header",
-        "banner",
-        "cert",
-        "product",
-        "product_category",
-        "version",
-        "cname",
-        "latitude",
-        "longitude",
-        "region",
-        "country_name",
-        "base_protocol",
-        "link",
-    ]
+    # 默认导出列 = 全部已知字段，单一来源见 ALL_FIELD_NAMES（序同 FofaResult）
 
     def __init__(
         self,
@@ -1354,7 +1365,7 @@ class Exporter:
         if self.requested_fields:
             fieldnames = self.requested_fields.copy()
         else:
-            fieldnames = self.BASE_FIELDS.copy()
+            fieldnames = ALL_FIELD_NAMES.copy()
 
         all_keys = set()
         data = self._prepare_dict_data()
@@ -1364,7 +1375,7 @@ class Exporter:
         dynamic_extra = [
             f
             for f in all_keys
-            if f not in self.BASE_FIELDS
+            if f not in ALL_FIELD_NAMES
             and not f.startswith("_")
             and f not in fieldnames
         ]
@@ -1836,16 +1847,25 @@ def handle_single_mode(client: FofaClient, args):
 
 _export_tasks: dict = {}
 _export_lock = threading.Lock()
-_EXPORT_TASK_TTL = 1800  # 30 分钟后自动清理已完成任务
+_EXPORT_TASK_TTL = 1800  # 终态任务完成 30 分钟后自动清理
+_MAX_REQUEST_BODY = 8 * 1024 * 1024  # Web API 请求体上限，挡住异常 Content-Length
+_export_cleanup_thread: Optional[threading.Thread] = None
+_export_cleanup_stop = threading.Event()
 
 
 def _cleanup_export_tasks():
-    """清理过期的导出任务及其临时文件，防止内存和磁盘泄漏"""
+    """清理过期的导出任务及其临时文件，防止内存和磁盘泄漏。
+
+    TTL 从任务完成时刻（finished_at）起算而非创建时刻，保证运行超过
+    30 分钟的深度导出完成后仍有完整的 30 分钟下载窗口。
+    """
     now = time.time()
     expired = []
     with _export_lock:
         for tid, task in list(_export_tasks.items()):
-            if task.status in ("done", "error") and (now - task.created_at) > _EXPORT_TASK_TTL:
+            if task.status in ("done", "error") and (
+                now - (task.finished_at or task.created_at)
+            ) > _EXPORT_TASK_TTL:
                 expired.append((tid, dict(task.output_files)))
                 del _export_tasks[tid]
     for tid, files in expired:
@@ -1854,6 +1874,77 @@ def _cleanup_export_tasks():
                 Path(filepath).unlink(missing_ok=True)
             except Exception:
                 pass
+
+
+def _cleanup_loop() -> None:
+    """后台循环：每 60 秒清理一次过期任务与临时文件。
+
+    仅 Web UI 模式下启动（`start_export_cleanup_timer`），
+    随服务器关闭时停止（`stop_export_cleanup_timer`）。
+    """
+    while not _export_cleanup_stop.wait(60):
+        _cleanup_export_tasks()
+
+
+def start_export_cleanup_timer() -> None:
+    """启动后台 TTL 清理线程（幂等）。"""
+    global _export_cleanup_thread
+    if _export_cleanup_thread and _export_cleanup_thread.is_alive():
+        return
+    _export_cleanup_stop.clear()
+    t = threading.Thread(target=_cleanup_loop, daemon=True, name="export-cleanup")
+    t.start()
+    _export_cleanup_thread = t
+
+
+def stop_export_cleanup_timer() -> None:
+    """停止后台 TTL 清理线程。"""
+    _export_cleanup_stop.set()
+
+
+def _has_running_export_task() -> bool:
+    """是否已有未取消的导出/批量任务在运行。
+
+    前端已限制单页一个任务，这里在服务端兜底，防止多标签页或脚本
+    并发多个任务、各自独立限流地消耗 FOFA 配额。已请求取消的任务
+    不再计入（其线程即将退出）。
+
+    注意：调用方必须已持有 _export_lock——与任务注册放在同一临界区，
+    避免检查与注册之间被并发请求插入（TOCTOU）。
+    """
+    return any(
+        t.status == "running" and not t.cancelled for t in _export_tasks.values()
+    )
+
+
+def _finish_export_task(task_id: str, status: str, **fields) -> None:
+    """在锁内将任务置为终态（done/error）并记录完成时间。
+
+    集中处理终态迁移，保证 finished_at 与 status 同步写入，
+    TTL 清理据此起算。
+    """
+    with _export_lock:
+        task = _export_tasks.get(task_id)
+        if task:
+            task.status = status
+            task.finished_at = time.time()
+            for name, value in fields.items():
+                setattr(task, name, value)
+
+
+def _start_export_thread(task_id: str, target: Callable, args: tuple) -> None:
+    """启动导出/批量任务线程；启动失败时将已注册任务就地置为终态。
+
+    任务注册先于线程启动：start() 失败（如线程资源耗尽）时若任务
+    停留在 running，会永久卡住服务端并发守卫。失败时置为 error 后
+    原样抛出，由调用方返回错误响应。
+    """
+    thread = threading.Thread(target=target, args=args, daemon=True)
+    try:
+        thread.start()
+    except Exception:
+        _finish_export_task(task_id, "error", error="任务线程启动失败")
+        raise
 
 
 @dataclass
@@ -1874,12 +1965,12 @@ class ExportTask:
     current_total_estimated: int = 0
     current_target_count: int = 0
     failed_count: int = 0
-    results: list = field(default_factory=list)
     output_files: dict = field(default_factory=dict)
     error: str = ""
     partial: bool = False
     partial_error: str = ""
     created_at: float = field(default_factory=time.time)
+    finished_at: float = 0.0
     cancelled: bool = False
     discard: bool = False
 
@@ -1891,6 +1982,18 @@ def _redact_sensitive(text: str, *secrets: str) -> str:
             safe_text = safe_text.replace(secret, "***")
     safe_text = re.sub(r"(key=)[^&\s]+", r"\1***", safe_text)
     return safe_text
+
+
+def _make_task_cancel_check(task_id: str):
+    """构造任务的取消检查函数：供 _sleep_interruptible 在限流/重试休眠中
+    及时响应「取消导出」，语义与进度回调中的取消一致。"""
+
+    def cancel_check() -> bool:
+        with _export_lock:
+            task = _export_tasks.get(task_id)
+            return bool(task and task.cancelled)
+
+    return cancel_check
 
 
 def _create_web_progress_callback(task_id: str, max_size: int = 0):
@@ -2011,6 +2114,53 @@ def _create_web_batch_progress_callback(
     return progress_callback
 
 
+def _request_body_length(header_value: Optional[str]) -> int:
+    """解析 Content-Length。缺失或 0 表示无正文；负数与超限直接拒绝，避免整包读入。"""
+    if header_value is None or str(header_value).strip() == "":
+        return 0
+    try:
+        length = int(str(header_value).strip())
+    except (TypeError, ValueError) as e:
+        raise FofaAPIError("Invalid Content-Length") from e
+    if length < 0:
+        raise FofaAPIError("Invalid Content-Length")
+    if length > _MAX_REQUEST_BODY:
+        raise FofaAPIError("请求体过大")
+    return length
+
+
+def _web_export_dir() -> Path:
+    """Web 导出临时目录。收成仅当前用户可进入，避免共享机器上其他用户读到结果。"""
+    output_dir = Path(tempfile.gettempdir()) / "fofa_web_exports"
+    output_dir.mkdir(exist_ok=True)
+    try:
+        os.chmod(output_dir, 0o700)
+    except OSError:
+        pass
+    return output_dir
+
+
+def _restrict_export_file(path: Path) -> None:
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _write_web_exports(prefix: str, results: list, fields: str) -> dict:
+    """把同一批结果写成 CSV/JSON/TXT，返回格式到路径的映射。"""
+    output_dir = _web_export_dir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    exporter = Exporter(results, fields=fields)
+    output_files = {}
+    for fmt in ("csv", "json", "txt"):
+        path = unique_path(output_dir / f"{prefix}_{timestamp}.{fmt}")
+        getattr(exporter, f"export_{fmt}")(path)
+        _restrict_export_file(path)
+        output_files[fmt] = str(path)
+    return output_files
+
+
 class FofaWebHandler(http.server.BaseHTTPRequestHandler):
     """FOFA Web UI 请求处理器"""
 
@@ -2079,7 +2229,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(path.read_bytes())
 
     def _read_body(self) -> dict:
-        length = int(self.headers.get("Content-Length", 0))
+        length = _request_body_length(self.headers.get("Content-Length"))
         if length == 0:
             return {}
         body = self.rfile.read(length)
@@ -2211,30 +2361,36 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             task = ExportTask(task_id=task_id, kind="export")
 
             _cleanup_export_tasks()
+            # 检查与注册在同一临界区，防止两个并发请求同时通过检查
             with _export_lock:
-                _export_tasks[task_id] = task
+                blocked = _has_running_export_task()
+                if not blocked:
+                    _export_tasks[task_id] = task
+            if blocked:
+                self._send_error("已有导出任务正在运行，请先取消或等待完成")
+                return
 
-            thread = threading.Thread(
-                target=self._run_export_task,
-                args=(task_id, query, fields, fill_percent, max_size, full),
-                daemon=True,
+            _start_export_thread(
+                task_id,
+                self._run_export_task,
+                (task_id, query, fields, fill_percent, max_size, full),
             )
-            thread.start()
 
             self._send_json({"success": True, "task_id": task_id})
         except Exception as e:
             self._send_error(e)
 
     def _run_export_task(self, task_id, query, fields, fill_percent, max_size, full):
-        client = self._current_client()
-        if not client:
-            with _export_lock:
-                task = _export_tasks.get(task_id)
-                if task:
-                    task.status = "error"
-                    task.error = "未配置有效的 FOFA API Key"
-            return
         try:
+            # client 获取也在 try 内：配置热重载期间若 config 异常导致
+            # get_client() 抛错，任务会被标记为 error，而不是让线程带着
+            # running 状态死亡（后者会永久卡住服务端并发守卫）
+            client = self._current_client()
+            if not client:
+                _finish_export_task(
+                    task_id, "error", error="未配置有效的 FOFA API Key"
+                )
+                return
             stats = client.search_all_efficient(
                 query,
                 max_size=max_size,
@@ -2242,6 +2398,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                 fill_percent=fill_percent,
                 full=full,
                 progress_callback=_create_web_progress_callback(task_id, max_size),
+                cancel_check=_make_task_cancel_check(task_id),
             )
 
             cancelled = False
@@ -2253,77 +2410,42 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                     discard = task.discard
 
             if discard:
-                with _export_lock:
-                    task = _export_tasks.get(task_id)
-                    if task:
-                        task.status = "error"
-                        task.error = "Cancelled by user"
+                _finish_export_task(task_id, "error", error="Cancelled by user")
                 return
 
             if not stats.results and cancelled:
-                with _export_lock:
-                    task = _export_tasks.get(task_id)
-                    if task:
-                        task.status = "error"
-                        task.error = "Cancelled by user"
+                _finish_export_task(task_id, "error", error="Cancelled by user")
                 return
 
-            output_dir = Path(tempfile.gettempdir()) / "fofa_web_exports"
-            output_dir.mkdir(exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_files = _write_web_exports("fofa_export", stats.results, fields)
 
-            exporter = Exporter(stats.results, fields=fields)
-            output_files = {}
-
-            csv_path = unique_path(output_dir / f"fofa_export_{timestamp}.csv")
-            exporter.export_csv(csv_path)
-            output_files["csv"] = str(csv_path)
-
-            json_path = unique_path(output_dir / f"fofa_export_{timestamp}.json")
-            exporter.export_json(json_path)
-            output_files["json"] = str(json_path)
-
-            txt_path = unique_path(output_dir / f"fofa_export_{timestamp}.txt")
-            exporter.export_txt(txt_path)
-            output_files["txt"] = str(txt_path)
-
-            with _export_lock:
-                task = _export_tasks.get(task_id)
-                if task:
-                    task.status = "done"
-                    task.progress = 1.0
-                    task.partial = cancelled or stats.partial
-                    task.partial_error = (
-                        "Cancelled by user"
-                        if cancelled
-                        else stats.partial_error
+            _finish_export_task(
+                task_id,
+                "done",
+                progress=1.0,
+                partial=cancelled or stats.partial,
+                partial_error=(
+                    "Cancelled by user" if cancelled else stats.partial_error
+                ),
+                message=(
+                    "已取消，已保留部分结果"
+                    if cancelled
+                    else (
+                        "部分导出完成，已保留可用结果"
+                        if stats.partial
+                        else "导出文件已生成"
                     )
-                    task.message = (
-                        "已取消，已保留部分结果"
-                        if cancelled
-                        else (
-                            "部分导出完成，已保留可用结果"
-                            if stats.partial
-                            else "导出文件已生成"
-                        )
-                    )
-                    task.fetched = len(stats.results)
-                    task.total_estimated = stats.total
-                    task.total_quota_used = stats.total_quota_used
-                    task.unique_ips = stats.unique_ips
-                    task.output_files = output_files
+                ),
+                fetched=len(stats.results),
+                total_estimated=stats.total,
+                total_quota_used=stats.total_quota_used,
+                unique_ips=stats.unique_ips,
+                output_files=output_files,
+            )
         except KeyboardInterrupt:
-            with _export_lock:
-                task = _export_tasks.get(task_id)
-                if task:
-                    task.status = "error"
-                    task.error = "Cancelled by user"
+            _finish_export_task(task_id, "error", error="Cancelled by user")
         except Exception as e:
-            with _export_lock:
-                task = _export_tasks.get(task_id)
-                if task:
-                    task.status = "error"
-                    task.error = self._safe_error(e)
+            _finish_export_task(task_id, "error", error=self._safe_error(e))
 
     def _handle_progress(self, parsed):
         params = parse_qs(parsed.query)
@@ -2375,7 +2497,12 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         with _export_lock:
             task = _export_tasks.get(task_id)
 
-        if not task or task.status != "done":
+        if not task:
+            self._send_error(
+                "导出任务不存在或已过期（任务完成后约 30 分钟自动清理），请重新导出", 404
+            )
+            return
+        if task.status != "done":
             self._send_error("Export not ready", 404)
             return
 
@@ -2402,6 +2529,12 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                 fill_percent = 0.8
             if not (0 < fill_percent <= 1):
                 fill_percent = 0.8
+            try:
+                max_size = int(body.get("max_size", 0))
+            except (TypeError, ValueError):
+                max_size = 0
+            if max_size < 0:
+                max_size = 0
 
             if not base_query or not targets:
                 self._send_error("Base query and targets required")
@@ -2418,33 +2551,39 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             )
 
             _cleanup_export_tasks()
+            # 检查与注册在同一临界区，防止两个并发请求同时通过检查
             with _export_lock:
-                _export_tasks[task_id] = task
+                blocked = _has_running_export_task()
+                if not blocked:
+                    _export_tasks[task_id] = task
+            if blocked:
+                self._send_error("已有导出任务正在运行，请先取消或等待完成")
+                return
 
-            thread = threading.Thread(
-                target=self._run_batch_task,
-                args=(task_id, queries, fields, fill_percent),
-                daemon=True,
+            _start_export_thread(
+                task_id,
+                self._run_batch_task,
+                (task_id, queries, fields, fill_percent, max_size),
             )
-            thread.start()
 
             self._send_json({"success": True, "task_id": task_id})
         except Exception as e:
             self._send_error(e)
 
-    def _run_batch_task(self, task_id, queries, fields, fill_percent):
-        client = self._current_client()
-        if not client:
-            with _export_lock:
-                task = _export_tasks.get(task_id)
-                if task:
-                    task.status = "error"
-                    task.error = "未配置有效的 FOFA API Key"
-            return
+    def _run_batch_task(self, task_id, queries, fields, fill_percent, max_size=0):
         try:
+            # 同 _run_export_task：client 获取在 try 内，异常时标记任务
+            # error，避免留下卡住并发守卫的 running 幽灵任务
+            client = self._current_client()
+            if not client:
+                _finish_export_task(
+                    task_id, "error", error="未配置有效的 FOFA API Key"
+                )
+                return
             all_results = []
             total_queries = len(queries)
             failed_count = 0
+            cancel_check = _make_task_cancel_check(task_id)
 
             for batch_idx, (query, _) in enumerate(queries):
                 base_count = len(all_results)
@@ -2457,20 +2596,31 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                         task.total_targets = total_queries
                         task.current_fetched = 0
                         task.current_total_estimated = 0
-                        task.current_target_count = 0
+                        task.current_target_count = max_size if 0 < max_size <= 10000 else 0
                         task.message = f"Target {batch_idx + 1}/{total_queries}"
 
                 stats = None
                 try:
-                    stats = client.search_all_efficient(
-                        query,
-                        max_size=0,
-                        fields=fields,
-                        fill_percent=fill_percent,
-                        progress_callback=_create_web_batch_progress_callback(
-                            task_id, batch_idx, total_queries, base_count
-                        ),
-                    )
+                    # 与 CLI 批量一致：上限不超过单次查询上限时不做时间游标，
+                    # 否则每个目标都会先探测再额外等待限流。
+                    if 0 < max_size <= 10000:
+                        stats = client.search(
+                            query,
+                            size=max_size,
+                            fields=fields,
+                            cancel_check=cancel_check,
+                        )
+                    else:
+                        stats = client.search_all_efficient(
+                            query,
+                            max_size=max_size,
+                            fields=fields,
+                            fill_percent=fill_percent,
+                            progress_callback=_create_web_batch_progress_callback(
+                                task_id, batch_idx, total_queries, base_count
+                            ),
+                            cancel_check=cancel_check,
+                        )
                     all_results.extend(stats.results)
                 except FofaAPIError:
                     failed_count += 1
@@ -2486,81 +2636,45 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                         task.failed_count = failed_count
 
                 if batch_idx < total_queries - 1:
-                    time.sleep(2)
+                    # 目标间隔同样可被取消中断，补齐批量模式的取消响应
+                    _sleep_interruptible(2, cancel_check)
 
-            output_dir = Path(tempfile.gettempdir()) / "fofa_web_exports"
-            output_dir.mkdir(exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_files = _write_web_exports("fofa_batch", all_results, fields)
 
-            exporter = Exporter(all_results, fields=fields)
-            output_files = {}
-
-            csv_path = unique_path(output_dir / f"fofa_batch_{timestamp}.csv")
-            exporter.export_csv(csv_path)
-            output_files["csv"] = str(csv_path)
-
-            json_path = unique_path(output_dir / f"fofa_batch_{timestamp}.json")
-            exporter.export_json(json_path)
-            output_files["json"] = str(json_path)
-
-            txt_path = unique_path(output_dir / f"fofa_batch_{timestamp}.txt")
-            exporter.export_txt(txt_path)
-            output_files["txt"] = str(txt_path)
-
-            with _export_lock:
-                task = _export_tasks.get(task_id)
-                if task:
-                    task.status = "done"
-                    task.progress = 1.0
-                    task.fetched = len(all_results)
-                    task.output_files = output_files
-                    task.failed_count = failed_count
-                    if failed_count:
-                        task.message = f"Partial: {failed_count}/{total_queries} failed"
+            done_fields = {"failed_count": failed_count}
+            if failed_count:
+                done_fields["message"] = f"Partial: {failed_count}/{total_queries} failed"
+            _finish_export_task(
+                task_id,
+                "done",
+                progress=1.0,
+                fetched=len(all_results),
+                output_files=output_files,
+                **done_fields,
+            )
         except KeyboardInterrupt:
             with _export_lock:
                 task = _export_tasks.get(task_id)
-                if task and task.discard:
-                    task.status = "error"
-                    task.error = "Cancelled by user"
-                    return
+                discard = bool(task and task.discard)
+            if discard:
+                _finish_export_task(task_id, "error", error="Cancelled by user")
+                return
             if all_results:
-                output_dir = Path(tempfile.gettempdir()) / "fofa_web_exports"
-                output_dir.mkdir(exist_ok=True)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                exporter = Exporter(all_results, fields=fields)
-                output_files = {}
-                csv_path = unique_path(output_dir / f"fofa_batch_{timestamp}.csv")
-                exporter.export_csv(csv_path)
-                output_files["csv"] = str(csv_path)
-                json_path = unique_path(output_dir / f"fofa_batch_{timestamp}.json")
-                exporter.export_json(json_path)
-                output_files["json"] = str(json_path)
-                txt_path = unique_path(output_dir / f"fofa_batch_{timestamp}.txt")
-                exporter.export_txt(txt_path)
-                output_files["txt"] = str(txt_path)
-                with _export_lock:
-                    task = _export_tasks.get(task_id)
-                    if task:
-                        task.status = "done"
-                        task.progress = 1.0
-                        task.partial = True
-                        task.partial_error = "Cancelled by user"
-                        task.message = "已取消，已保留部分结果"
-                        task.fetched = len(all_results)
-                        task.output_files = output_files
+                output_files = _write_web_exports("fofa_batch", all_results, fields)
+                _finish_export_task(
+                    task_id,
+                    "done",
+                    progress=1.0,
+                    partial=True,
+                    partial_error="Cancelled by user",
+                    message="已取消，已保留部分结果",
+                    fetched=len(all_results),
+                    output_files=output_files,
+                )
             else:
-                with _export_lock:
-                    task = _export_tasks.get(task_id)
-                    if task:
-                        task.status = "error"
-                        task.error = "Cancelled by user"
+                _finish_export_task(task_id, "error", error="Cancelled by user")
         except Exception as e:
-            with _export_lock:
-                task = _export_tasks.get(task_id)
-                if task:
-                    task.status = "error"
-                    task.error = self._safe_error(e)
+            _finish_export_task(task_id, "error", error=self._safe_error(e))
 
     def _handle_cancel(self):
         parsed = urlparse(self.path)
@@ -2670,11 +2784,12 @@ class FofaWebServer:
         FofaWebHandler.client = self.client
         FofaWebHandler.config_manager = self.config_manager
 
-        class ThreadingServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
-            allow_reuse_address = True
-            daemon_threads = True
-
-        self.httpd = ThreadingServer((self.host, self.port), FofaWebHandler)
+        # ThreadingHTTPServer 默认已启用 daemon_threads 与
+        # allow_reuse_address（HTTPServer 类属性），无需重复设置
+        self.httpd = http.server.ThreadingHTTPServer(
+            (self.host, self.port), FofaWebHandler
+        )
+        start_export_cleanup_timer()
 
         is_wildcard = self.host == "0.0.0.0"
         url_host = "127.0.0.1" if is_wildcard else self.host
@@ -2699,6 +2814,7 @@ class FofaWebServer:
             self.httpd.serve_forever()
         except KeyboardInterrupt:
             print(f"\n[*] 服务器已停止")
+            stop_export_cleanup_timer()
             self.httpd.shutdown()
 
 
@@ -2706,11 +2822,6 @@ class FofaWebServer:
 
 
 def main():
-    # 检查是否显示帮助
-    if "-h" in sys.argv or "--help" in sys.argv:
-        build_parser().print_help()
-        sys.exit(0)
-
     parser = build_parser()
     args = parser.parse_args()
     web_mode = args.web or (not args.query and not args.batch_file and not args.check)
@@ -2843,6 +2954,9 @@ def run_batch_search(
     """
     all_results = []
     total_queries = len(queries)
+    is_max, limit_value = parse_limit_value(args.limit)
+    query_fields = _merge_dedup_fields(args.fields, args.dedup)
+    use_deep = limit_value > 10000 or is_max
 
     for idx, (query, line_no) in enumerate(queries, 1):
         query = query.strip()
@@ -2852,11 +2966,7 @@ def run_batch_search(
         print(f"\n{CYAN}[{idx}/{total_queries}] 查询:{RESET} {query}")
 
         try:
-            is_max, limit_value = parse_limit_value(args.limit)
-
-            query_fields = _merge_dedup_fields(args.fields, args.dedup)
-
-            if limit_value > 10000 or is_max:
+            if use_deep:
                 max_size = 0 if is_max else limit_value
                 stats = client.search_all_efficient(
                     query,

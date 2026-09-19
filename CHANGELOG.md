@@ -2,6 +2,46 @@
 
 本文件使用发布记录（Releases）风格维护版本变更。
 
+## v1.6.0 - 2026-09-19
+
+### 修复
+- Web 批量模式进度面板被立刻藏掉：`syncModeContent` 只在深度导出模式下显示导出面板，批量查询共用该面板，启动后 `updateLayout` 把面板 `display` 设为 `none`。进度、错误、取消和下载入口都看不见，按钮只停在「批量查询中...」。现批量模式同样保留面板。
+- FOFA API 请求 URL 参数统一编码：`qbase64`/`fields`/`key` 在拼接 URL 前经 `urllib.parse.quote` 编码。base64 字母表含 `+`，未编码时存在被服务端按表单规则解码为空格、查询语句遭破坏的隐患（防御性修复，与 FOFA 官方 SDK 惯例一致）。
+- 「取消导出」响应迟缓：取消原先只在进度事件之间生效，任务可能停留在限流休眠（最长 60 秒）或重试退避（最长 30 秒）中迟迟不退出；现在休眠改为分片执行并持续检查取消标志，取消可在约 0.25 秒内中断当前休眠（等待中的 HTTP 请求仍受 45 秒超时约束），批量模式目标间的 2 秒间隔休眠同样改为可中断。
+- 自定义字段去重：`dedup_results` 对不在 `FofaResult` 上的字段改为读取 `_extra`。此前 `getattr` 取不到这些字段、一律当成空字符串，只按该字段去重时所有行会被并成一条。
+- 占位符密钥：`config.example.json` 里的 `your_fofa_api_key_here` 不在 `is_valid()` 的占位符集合中，复制示例后会被当成已配置并直接请求 FOFA。现与 `your-fofa-key-here`、`your-api-key` 一样视为未配置；示例文件改回与 `DEFAULT_CONFIG` 相同的占位符。
+- Web UI 历史下拉的 `title` 属性改用 `escAttr`。`escHtml` 不转义引号，普通 FOFA 查询（含 `"`）会截断提示；特定查询还能逃出属性。
+- 顶栏账户信息（剩余查询、过期时间、VIP 等级、中转站今日剩余）写入 `innerHTML` 前经 `escHtml`，避免接口返回值打断页面。
+- Web 导出临时目录 `fofa_web_exports` 尽量收成仅当前用户可进入（`0700`），导出文件 `0600`。Windows 上 `chmod` 只影响只读位，同用户读取不受影响。
+- Web API 请求体上限 8MiB。`Content-Length` 为负或超过上限时拒绝，不再按声明长度整包读入。
+- CI：Linux arm64 改在 `ubuntu-24.04-arm` 上编译（此前与 amd64 共用 `ubuntu-latest`，名为 arm64 的产物实际是 amd64），并在编译前断言机器架构。macOS 只发布 Apple Silicon（M 系列）产物 `fofatoto_mac_arm64`，不再发布 Intel 包。手动触发不再执行 `git tag <分支名>`；Release 只在 `v*` tag 推送时创建。
+- 导出任务 TTL 改为从完成时刻（`finished_at`）起算而非创建时刻：运行超过 30 分钟的深度导出此前一完成就可能被 60 秒后台清理删除下载文件，与提示语「完成后约 30 分钟自动清理」不符；现在长任务完成后仍有完整的 30 分钟下载窗口，终态迁移统一经 `_finish_export_task` 保证状态与完成时间同步写入。
+- 服务端导出并发守卫的「检查+注册」合并为同一临界区，消除两个并发请求同时通过检查、绕过单任务限制的竞态窗口（`_has_running_export_task` 改为调用方持锁语义）；导出/批量任务线程中获取 client 移入异常保护——配置热重载期间 `get_client()` 抛错时任务会被正确置为 error，不再留下永久卡住并发守卫的 running 幽灵任务；任务线程 `start()` 本身失败（如线程资源耗尽）同样会就地置为终态并向客户端返回错误（`_start_export_thread` 统一收口），堵住幽灵任务的最后一条产生路径。
+- 导出任务过期临时文件泄漏：TTL 清理原先只在新建任务时触发，无人发新任务时已完成任务的临时文件（`fofa_web_exports/`）一直滞留；现在 Web UI 启动后台清理线程，每 60 秒自动清理过期任务及临时文件，服务器停止时终止线程。
+- Web UI `buildRowsHtml` 属性注入：前端 `escHtml` 仅转义 `& < >`，在 `title="..."` / `href="..."` / `class="..."` 属性上下文中未转义引号，FOFA 返回值含 `"` 时可逃逸属性；新增 `escAttr` 函数补转义 `&quot;` `&#39;`，`buildRowsHtml` 属性值统一使用（文本内容仍用 `escHtml`；主渲染路径 `updateRowNode` 使用 `setAttribute` 不受影响）。
+- 导出任务过期后点击下载提示不友好：原先后端统一返回 `Export not ready`（404），且前端 `window.open` 直接把 JSON 错误当页面打开；现在后端区分「任务不存在或已过期」与「尚未完成」两种情况，前端下载改为 `fetch` + Blob，失败时在页面内弹出具体原因（如任务已被 30 分钟 TTL 清理，需重新导出）。
+
+### 新增
+- Web 批量模式新增「每目标上限」：每个目标最多导出 N 条（0 为不限制）。1–10000 走单次查询，与命令行 `-l` 一致，避免深度游标对每个目标先探测再等待限流；0 或超过 10000 仍走深度导出。
+- 服务端导出任务并发限制：`/api/export` 与 `/api/batch` 在已有未取消任务运行时拒绝新任务（与前端单任务限制一致），防止多标签页或脚本并发多个任务、各自独立限流地消耗 FOFA 配额。
+
+### 优化
+- 大批量导出序列化性能：`FofaResult.to_dict()` 改用浅拷贝替代 `dataclasses.asdict()` 递归深拷贝（字段均为 str/dict，行为不变），10 万行级导出的字典转换明显提速。
+- 即时预览表头排序改为数值感知：两侧值均为纯数字时按数值比较（如 port 列 `9` 正确排在 `80` 之前），否则退回字符串比较（IP 等混合值行为不变）。
+
+### 其他
+- 字段清单收敛为单一来源：新增由 `FofaResult` 派生的 `ALL_FIELD_NAMES`/`KNOWN_FIELDS`（本地自定义字段 `url` 单独由 `CUSTOM_FIELDS` 声明），`search()` 的内联字段集合与 `Exporter.BASE_FIELDS` 改由其统一供给；Web UI 字段分组迁移为 `WEB_FIELD_CATEGORIES` 常量并经新占位符 `__FIELD_CATEGORIES_JSON__` 注入，模块加载时自动校验分组与字段全集一致——新增 FOFA 字段只需改 dataclass 与分组两处（同一文件）。
+- 死代码清理：`dedup_results` 的 elif 不可达分支（host/ip/port/domain/protocol 均为 dataclass 属性，`hasattr` 恒真）简化为统一 `getattr` 路径；`ExportTask.results` 未使用字段移除；`main()` 中与 argparse 重复的手动 `-h`/`--help` 检查移除。
+- `run_batch_search` 循环不变量（`parse_limit_value`/`_merge_dedup_fields`）提到循环外，避免每次迭代重复解析。
+- `FofaWebServer` 内部类 `ThreadingServer` 替换为标准库 `http.server.ThreadingHTTPServer`（Python 3.7+；`allow_reuse_address`/`daemon_threads` 均为其类默认值，无需构造后重复设置）；移除随之无用的 `import socketserver`。
+- 修正 `dedup_results` 内联注释（`_extra` 自定义字段参与去重分组，见上方修复条目）。
+- 新增单元测试套件 `test_fofatoto.py`（纯标准库 `unittest`，77 个用例，不发真实网络请求）：覆盖字段清单单一来源校验、`_api_fields`/`build_url`/`dedup_results`/`parse_limit_value` 等纯函数、`search()` URL 编码与结果解析（mock urlopen）、`Exporter` 三格式导出、导出任务守卫/终态迁移/TTL 清理（含 `finished_at` 锚点与线程启动失败收口）、Web 批量每目标上限路径选择、版本三处一致性等。
+- CI 新增 `check` job 并置于所有构建之前：语法检查（`py_compile`）+ 单元测试 + 版本一致性校验（`APP_VERSION` = `pyproject.toml` = `uv.lock`）；tag 推送时额外校验 tag 与 `APP_VERSION` 匹配，防止发错版本号。
+
+### 文档
+- AGENTS.md：移除已在 v1.4.0 删除的 `gan-harness/` 段落；补充测试运行说明与 CI check job 描述；刷新组件行号表。CI 段落改为 Linux 分架构 runner、macOS 仅 M 系列。
+- README 下载表去掉 macOS Intel，只保留 `fofatoto_mac_arm64`。
+
 ## v1.5.0 - 2026-08-13
 
 ### 新增

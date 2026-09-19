@@ -26,8 +26,7 @@
 | Windows | amd64 | `fofatoto.exe` |
 | Linux | amd64 | `fofatoto` |
 | Linux | arm64 | `fofatoto_arm64` |
-| macOS | amd64 | `fofatoto_mac` |
-| macOS | arm64 (M 芯片) | `fofatoto_mac_arm64` |
+| macOS | arm64（M 系列） | `fofatoto_mac_arm64` |
 
 **Windows 用户**：下载后双击运行即可启动本地 Web UI。首次运行会自动在程序所在目录创建 `config.json`，页面会提示需要填写的配置文件路径。
 
@@ -82,7 +81,7 @@ Web UI 提供三种模式：
 |------|------|
 | 即时预览 | 快速查询并在页面表格中查看结果：虚拟滚动承载最多 10000 条、字段 chip 拖拽排序、点击表头排序、URL 跳转、当前预览 CSV / JSON / TXT 导出 |
 | 深度导出 | 后台按 `before` 时间游标分批拉取，页面展示进度、目标、配额、耗时，完成后下载 CSV / JSON / TXT |
-| 批量模式 | 占位符批量替换目标，复用深度导出流程合并结果 |
+| 批量模式 | 占位符批量替换目标，复用深度导出流程合并结果；可设每个目标的导出上限（0 为不限制） |
 
 主要交互功能：
 
