@@ -11,7 +11,7 @@ Guidance for agents working in this repository.
 ## Commands
 
 ```bash
-# Syntax check + unit tests (stdlib unittest, 77 tests, no network calls)
+# Syntax check + unit tests (stdlib unittest, 106 tests, no network calls)
 python -m py_compile fofatoto.py
 python -m unittest test_fofatoto -v
 
