@@ -8,25 +8,29 @@ from __future__ import annotations
 import argparse
 import base64
 import csv
+import hashlib
 import http.server
 import ipaddress
 import json
 import os
 import re
 import socket
+import ssl
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 import uuid
 import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Callable, Optional
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, unquote_to_bytes, urljoin, urlparse
 
 # ============ Banner ============
 
@@ -138,6 +142,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Micr
 .search-row input[type=text]:focus{border-color:var(--accent);background:#fff}
 .search-row textarea#queryInput{display:block;width:100%;padding:8px 12px;font-size:13px;line-height:1.5;font-family:"SF Mono","Fira Code",Consolas,Monaco,monospace;border:1px solid var(--border);border-radius:2px;background:#fafbfc;color:var(--text);outline:none;transition:border-color 0.15s ease,background 0.15s ease;resize:none;overflow:hidden;white-space:nowrap;min-height:calc(1.5em + 18px);max-height:200px}
 .search-row textarea#queryInput:focus{border-color:var(--accent);background:#fff;position:absolute;left:0;right:0;top:0;z-index:50;box-shadow:0 6px 18px rgba(15,36,64,0.16);white-space:pre-wrap;max-height:calc(100dvh - 160px)}
+.search-row textarea#queryInput.drop-target{border-color:var(--accent);background:#eff6ff;outline:2px dashed rgba(49,130,206,0.45);outline-offset:-2px}
 .search-row .btn{flex-shrink:0}
 .btn{padding:8px 20px;font-size:13px;font-weight:600;border:1px solid transparent;border-radius:2px;cursor:pointer;white-space:nowrap;transition:all 0.15s ease}
 .btn:disabled{opacity:.65;cursor:not-allowed}
@@ -174,7 +179,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Micr
 .fp-field.selected::after{content:'';display:inline-block;width:10px;height:10px;margin-left:4px;background:rgba(255,255,255,0.9);clip-path:polygon(20% 50%,40% 70%,80% 20%,70% 15%,40% 55%,28% 40%);vertical-align:middle}
 .fp-field.hidden{display:none}
 .fp-empty{padding:16px 10px;text-align:center;color:var(--text-secondary);font-size:12px}
-.options-row{display:flex;gap:16px;align-items:center;margin-top:12px;flex-wrap:wrap}
+.options-row{display:flex;gap:16px;align-items:center;margin-top:12px;flex-wrap:wrap;min-height:25px}
 .options-row label{font-size:12px;color:var(--text-secondary);font-weight:600}
 .options-row select,.options-row input[type=number]{padding:4px 8px;font-size:12px;border:1px solid var(--border);border-radius:2px;background:#fafbfc;margin-left:4px;transition:all 0.15s ease}
 .options-row select{-webkit-appearance:none;-moz-appearance:none;appearance:none;padding:4px 24px 4px 8px;font-size:11px;font-weight:600;color:var(--text-secondary);cursor:pointer;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'><path d='M2 4l3 3 3-3' fill='none' stroke='%2364748b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/></svg>");background-repeat:no-repeat;background-position:right 6px center;background-color:var(--card-bg)}
@@ -184,6 +189,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Micr
 .options-row input[type=number]{width:80px}
 .options-row input[type=text]{padding:4px 8px;font-size:12px;border:1px solid var(--border);border-radius:2px;background:#fafbfc;margin-left:4px;transition:all 0.15s ease}
 .options-row input[type=text]:focus{border-color:var(--accent);background:#fff;outline:none}
+.options-row select,.options-row input[type=number],.options-row input[type=text],.options-row .mini-btn{height:25px;box-sizing:border-box;vertical-align:middle}
 .batch-textarea{width:100%;min-height:160px;margin-top:12px;padding:10px;font-size:12px;font-family:"SF Mono","Fira Code",Consolas,Monaco,monospace;border:1px solid var(--border);border-radius:2px;background:#fafbfc;resize:vertical;outline:none;transition:all 0.15s ease}
 .batch-textarea:focus{border-color:var(--accent);background:#fff}
 .history-dropdown{display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:80;background:var(--card-bg);border:1px solid var(--border);border-radius:2px;max-height:min(300px,calc(100dvh - 180px));overflow-y:auto;overscroll-behavior:contain;box-shadow:0 8px 18px rgba(15,36,64,0.14)}
@@ -238,6 +244,9 @@ td.mono{font-family:"SF Mono","Fira Code",Consolas,Monaco,monospace;font-size:11
 .overlay.show{display:flex}
 .overlay-content{background:var(--card-bg);border:1px solid var(--border);border-radius:2px;padding:32px 40px;min-width:420px;max-width:520px}
 .overlay-content h3{font-size:15px;font-weight:700;margin-bottom:20px;color:var(--primary)}
+.icon-modal-input{width:100%;padding:8px 12px;font-size:13px;font-family:"SF Mono","Fira Code",Consolas,Monaco,monospace;border:1px solid var(--border);border-radius:2px;background:#fafbfc;color:var(--text);outline:none;margin-bottom:12px;transition:all 0.15s ease}
+.icon-modal-input:focus{border-color:var(--accent);background:#fff}
+.icon-modal-error{display:none;background:#fef2f2;border:1px solid #fecaca;color:var(--danger);border-radius:2px;padding:8px 10px;font-size:12px;margin-bottom:12px;text-align:left;word-break:break-all}
 .progress-track{height:8px;background:var(--border);overflow:hidden;margin-bottom:12px;border-radius:1px}
 .progress-fill{height:100%;width:0;background:linear-gradient(90deg,var(--accent) 30%,#63b3ed 50%,var(--accent) 70%);background-size:200% 100%;transition:width .3s;animation:shimmer 2s ease-in-out infinite}
 @keyframes shimmer{0%{background-position:200% center}100%{background-position:-200% center}}
@@ -348,6 +357,7 @@ td{max-width:240px}
 <div class="options-row" id="instantOptions">
 <label>数量:<select id="instantSize"><option value="10">10</option><option value="20">20</option><option value="50">50</option><option value="100" selected>100</option><option value="200">200</option><option value="500">500</option><option value="1000">1000</option><option value="2000">2000</option><option value="5000">5000</option><option value="10000">10000</option></select></label>
 <span class="exc-chips" id="exclusionChips"></span>
+<button class="mini-btn" onclick="openIconModal()">Icon 提取</button>
 <div class="settings-wrap"><button class="mini-btn" onclick="toggleSettings(event)">设置</button><div class="settings-popup" id="settingsPopup"><label><input type="checkbox" id="fitToWindow" checked onchange="toggleFitToWindow(this)"> 适应窗口宽度</label><label><input type="checkbox" id="instantFull"> 全部数据</label><label><input type="checkbox" id="instantAutoQuery"> 选取查询后自动搜索</label><label><input type="checkbox" id="showHistory" checked onchange="toggleShowHistory(this)"> 显示历史记录</label></div></div>
 </div>
 <div class="options-row" id="exportOptions" style="display:none">
@@ -403,6 +413,17 @@ td{max-width:240px}
 </div>
 </div>
 </div>
+<div class="overlay" id="iconOverlay">
+<div class="overlay-content" style="text-align:center">
+<h3>提取 Icon Hash</h3>
+<input type="text" class="icon-modal-input" id="iconTargetInput" placeholder="网站地址，如 https://example.com" spellcheck="false" autocomplete="off">
+<div class="icon-modal-error" id="iconModalError"></div>
+<div style="display:flex;gap:8px;justify-content:center">
+<button class="btn btn-primary" id="iconExtractBtn" onclick="submitIconExtract()">提取并填入</button>
+<button class="btn btn-secondary" onclick="closeIconModal()">取消</button>
+</div>
+</div>
+</div>
 <script>
 var fieldCategories=__FIELD_CATEGORIES_JSON__;
 var allFields=[];fieldCategories.forEach(function(c){c.fields.forEach(function(f){allFields.push(f)})});
@@ -419,7 +440,7 @@ function toggleField(f){var i=selectedFields.indexOf(f);if(i>-1)selectedFields.s
 function removeField(f){var i=selectedFields.indexOf(f);if(i>-1){selectedFields.splice(i,1);renderChips();renderFieldPanel()}}
 function filterFields(){var q=document.getElementById("fpSearch").value.trim().toLowerCase();var total=0;document.querySelectorAll("#fpBody .fp-category").forEach(function(cat){var v=0;cat.querySelectorAll(".fp-field").forEach(function(b){var m=!q||b.dataset.field.indexOf(q)>-1;b.classList.toggle("hidden",!m);if(m){v++;total++}});cat.style.display=v>0?"":"none"});var old=document.getElementById("fpEmpty");if(total===0&&q){if(!old){var el=document.createElement("div");el.id="fpEmpty";el.className="fp-empty";el.textContent="无匹配字段";document.getElementById("fpBody").appendChild(el)}}else if(old)old.remove()}
 function getSelectedFields(){return selectedFields.join(",")}
-document.addEventListener("DOMContentLoaded",function(){initFieldSelector();loadAccountInfo(false).finally(function(){lastAccountRefresh=Date.now()});setupModeTabs();setupSearchShortcut();updateHistoryCount();var sh=document.getElementById("showHistory");if(sh)sh.checked=getShowHistory();updateLayout();startAccountRefresh();document.addEventListener("visibilitychange",onVisibilityChange);window.addEventListener("resize",function(){autoResizeQueryInput();updateLayout();renderVirtual()})});
+document.addEventListener("DOMContentLoaded",function(){initFieldSelector();loadAccountInfo(false).finally(function(){lastAccountRefresh=Date.now()});setupModeTabs();setupSearchShortcut();setupQueryDropTarget();updateHistoryCount();var sh=document.getElementById("showHistory");if(sh)sh.checked=getShowHistory();updateLayout();startAccountRefresh();document.addEventListener("visibilitychange",onVisibilityChange);window.addEventListener("resize",function(){autoResizeQueryInput();updateLayout();renderVirtual()})});
 function setupModeTabs(){document.querySelectorAll(".mode-tab").forEach(function(t){t.addEventListener("click",function(){switchMode(this.dataset.mode)})})}
 function modeButtonText(){return currentMode==="instant"?"搜索":(currentMode==="export"?"导出":"批量查询")}
 function refreshModeButton(){var btn=document.getElementById("searchBtn");btn.textContent=modeButtonText();btn.className="btn btn-primary"}
@@ -427,6 +448,8 @@ function switchMode(mode){if(exportPollTimer&&currentMode!==mode){showMessage("e
 function syncModeContent(){var results=document.getElementById("resultsArea"),panel=document.getElementById("exportPanel");if(results)results.style.display=currentMode==="instant"&&previewRendered?"block":"none";if(panel)panel.style.display=(currentMode==="export"||currentMode==="batch")&&panel.classList.contains("show")?"":"none"}
 function autoResizeQueryInput(){var el=document.getElementById("queryInput");if(!el)return;el.style.height="auto";var h=el.scrollHeight;var maxH=el===document.activeElement?Math.floor(window.innerHeight-160):200;el.style.height=Math.max(34,Math.min(h,maxH))+"px";var dd=document.getElementById("historyDropdown");if(dd&&dd.classList.contains("show")){dd.style.top=el.getBoundingClientRect().height+4+"px";fitHistoryDropdown()}updateLayout()}
 function setupSearchShortcut(){var input=document.getElementById("queryInput");input.addEventListener("focus",function(){renderHistorySuggestions(true);autoResizeQueryInput()});input.addEventListener("input",function(){renderHistorySuggestions(false);autoResizeQueryInput()});input.addEventListener("blur",function(){input.style.height="calc(1.5em + 18px)";var dd=document.getElementById("historyDropdown");if(dd)dd.style.top="";updateLayout()});input.addEventListener("keydown",function(e){var dd=document.getElementById("historyDropdown"),open=dd&&dd.classList.contains("show");if(e.key==="ArrowDown"){e.preventDefault();if(!open)renderHistorySuggestions(true);moveHistorySelection(1)}else if(e.key==="ArrowUp"){e.preventDefault();if(!open)renderHistorySuggestions(true);moveHistorySelection(-1)}else if(e.key==="Escape"){closeHistorySuggestions()}else if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();if(open&&historyActiveIndex>-1&&pickActiveHistory()){return}closeHistorySuggestions();executeSearch()}})}
+function dropFieldToQuery(fieldName){var input=document.getElementById("queryInput"),base=input.value.replace(/\s+$/,""),frag=fieldName+'=""',pos;if(!base){input.value=frag;pos=frag.length-1}else if(/(&&|\|\|)\s*$/.test(base)){input.value=base+" "+frag;pos=input.value.length-1}else{input.value=base+" || "+frag;pos=input.value.length-1}input.focus();closeHistorySuggestions();input.setSelectionRange(pos,pos);autoResizeQueryInput()}
+function setupQueryDropTarget(){var input=document.getElementById("queryInput");input.addEventListener("dragover",function(e){if(dragField===null)return;e.preventDefault();e.dataTransfer.dropEffect="move";input.classList.add("drop-target")});input.addEventListener("dragleave",function(){if(dragField===null)return;input.classList.remove("drop-target")});input.addEventListener("drop",function(e){if(dragField===null)return;e.preventDefault();e.stopPropagation();input.classList.remove("drop-target");var f=dragField;dragField=null;clearChipDropClasses();dropFieldToQuery(f)})}
 function showConfigNotice(d){var box=document.getElementById("configAlert");document.getElementById("configAlertTitle").textContent="未配置有效的 FOFA API Key";document.getElementById("configAlertText").textContent="请编辑下方配置文件，保存后刷新本页面。";document.getElementById("configPath").textContent=d.config_path||"";document.getElementById("configTemplate").textContent=d.config_template||"";box.classList.add("show")}
 function hideConfigNotice(){document.getElementById("configAlert").classList.remove("show")}
 function formatApiError(data,fallback){var msg=(data&&data.error)||fallback||"请求失败";if(data&&data.data&&data.data.configured===false&&data.data.config_path){msg+="。配置文件: "+data.data.config_path}return msg}
@@ -435,6 +458,10 @@ function startAccountRefresh(){if(accountRefreshTimer)return;accountRefreshTimer
 function stopAccountRefresh(){if(accountRefreshTimer){clearInterval(accountRefreshTimer);accountRefreshTimer=null}}
 function onVisibilityChange(){if(document.hidden){stopAccountRefresh()}else{var elapsed=Date.now()-lastAccountRefresh;if(elapsed>=ACCOUNT_REFRESH_INTERVAL){loadAccountInfo(true);lastAccountRefresh=Date.now()}startAccountRefresh()}}
 function executeSearch(){var q=document.getElementById("queryInput").value.trim();if(!q)return;closeHistorySuggestions();addToHistory(q);if(currentMode==="instant")doInstantSearch(q);else if(currentMode==="export")doDeepExport(q);else doBatchSearch(q)}
+function openIconModal(){var ov=document.getElementById("iconOverlay"),inp=document.getElementById("iconTargetInput");document.getElementById("iconModalError").style.display="none";inp.value="";inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();submitIconExtract()}else if(e.key==="Escape"){closeIconModal()}};ov.classList.add("show");setTimeout(function(){inp.focus()},50)}
+function closeIconModal(){document.getElementById("iconOverlay").classList.remove("show")}
+function iconModalError(msg){var el=document.getElementById("iconModalError");el.textContent=msg;el.style.display="block"}
+function submitIconExtract(){var inp=document.getElementById("iconTargetInput"),target=inp.value.trim();if(!target){iconModalError("请输入网站地址");return}var btn=document.getElementById("iconExtractBtn"),oldText=btn.textContent;btn.disabled=true;btn.textContent="提取中...";fetch("/api/icon",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target:target})}).then(function(r){return r.json()}).then(function(data){if(!data.success){iconModalError(formatApiError(data,"icon 提取失败"));return}var q='icon_hash="'+(data.data||{}).icon_hash+'"';var qin=document.getElementById("queryInput");qin.value=q;autoResizeQueryInput();closeIconModal();qin.focus()}).catch(function(e){iconModalError("网络错误: "+e.message)}).finally(function(){btn.disabled=false;btn.textContent=oldText})}
 function doInstantSearch(query){var size=parseInt(document.getElementById("instantSize").value)||100,fields=getSelectedFields(),full=document.getElementById("instantFull").checked;clearResults();showMessage("info","搜索中...");fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:query,size:size,fields:fields,full:full})}).then(function(r){return r.json()}).then(function(data){clearMessage();if(data.success){currentResults=data.data.results||[];currentColumns=data.data.columns||[];var _sb=getScrollBox();if(_sb)_sb.scrollTop=0;renderResults(data.data)}else showMessage("error",formatApiError(data,"搜索失败"))}).catch(function(e){showMessage("error","网络错误: "+e.message)})}
 function doDeepExport(query){var fill=parseFloat(document.getElementById("exportFill").value),maxSize=parseInt(document.getElementById("exportMaxSize").value)||0,fields=getSelectedFields(),full=document.getElementById("exportFull").checked;if(isNaN(fill))fill=0.8;if(fill<=0||fill>1){showMessage("error","覆盖率必须在 0 到 1 之间");return}if(maxSize<0){showMessage("error","上限不能小于 0");return}if(exportPollTimer){showMessage("error","已有导出任务正在运行，请先取消或等待完成");return}progressUiMode="panel";exportTaskId=null;clearMessage();showExportPanelStart(query,fill,maxSize,full);setSearchBusy(true,"导出中...");fetch("/api/export",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:query,fill_percent:fill,max_size:maxSize,fields:fields,full:full})}).then(function(r){return r.json()}).then(function(data){if(data.success){exportTaskId=data.task_id;pollProgress()}else{setSearchBusy(false);showExportPanelError(formatApiError(data,"导出失败"))}}).catch(function(e){setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})}
 function doBatchSearch(baseQuery){var ph=document.getElementById("batchPlaceholder").value||"{}",targets=document.getElementById("batchTargets").value.trim(),fill=parseFloat(document.getElementById("batchFill").value)||0.8,maxSize=parseInt(document.getElementById("batchMaxSize").value)||0,fields=getSelectedFields();if(!targets){showMessage("error","请输入批量目标");return}if(baseQuery.indexOf(ph)===-1){showMessage("error","基础查询必须包含占位符: "+ph);return}if(maxSize<0){showMessage("error","每目标上限不能小于 0");return}if(exportPollTimer){showMessage("error","已有任务正在运行，请先取消或等待完成");return}var targetLines=targets.replace(/\r/g,"").split("\n").filter(function(l){return l.trim()});progressUiMode="panel";exportTaskId=null;clearMessage();showBatchPanelStart(baseQuery,targetLines.length,ph,fill,maxSize);setSearchBusy(true,"批量查询中...");fetch("/api/batch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({base_query:baseQuery,targets:targetLines,placeholder:ph,fill_percent:fill,max_size:maxSize,fields:fields})}).then(function(r){return r.json()}).then(function(data){if(data.success){exportTaskId=data.task_id;pollProgress()}else{setSearchBusy(false);showExportPanelError(formatApiError(data,"批量导出失败"))}}).catch(function(e){setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})}
@@ -454,7 +481,7 @@ function hideCancelConfirm(){document.getElementById("cancelOverlay").classList.
 function downloadExport(format){if(!exportTaskId)return;fetch("/api/export/download?task_id="+exportTaskId+"&format="+format).then(function(r){if(!r.ok)return r.json().then(function(j){throw new Error(j.error||("HTTP "+r.status))});var cd=r.headers.get("Content-Disposition")||"",m=cd.match(/filename="([^"]*)"/),name=m&&m[1]?m[1]:("fofa_export."+format);return r.blob().then(function(b){var u=URL.createObjectURL(b),a=document.createElement("a");a.href=u;a.download=name;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(u)},1000)})}).catch(function(e){showMessage("error","下载失败: "+e.message)})}
 function showOverlay(title){document.getElementById("progressTitle").textContent=title;document.getElementById("progressFill").style.width="0%";document.getElementById("progressDetails").innerHTML="初始化中...";document.getElementById("progressActions").innerHTML='<button class="btn btn-secondary" onclick="cancelExport()">取消</button>';document.getElementById("progressOverlay").classList.add("show")}
 function hideOverlay(){document.getElementById("progressOverlay").classList.remove("show")}
-function renderResults(data){var area=document.getElementById("resultsArea"),rows=data.results||[],table=document.getElementById("resultsTable"),empty=document.getElementById("emptyState");previewRendered=true;syncModeContent();var pickBtns='<button class="mini-btn" id="pickFilterBtn" onclick="enterPickMode(\'filter\')">不看</button><button class="mini-btn" id="pickQueryBtn" onclick="enterPickMode(\'query\')">选取查询</button>';var actions=rows.length>0?'<div class="stats-actions"><span class="preview-status" id="previewStatus"></span>'+pickBtns+'<button class="mini-btn" onclick="exportPreview(&quot;csv&quot;)">导出 CSV</button><button class="mini-btn" onclick="exportPreview(&quot;json&quot;)">JSON</button><button class="mini-btn" onclick="exportPreview(&quot;txt&quot;)">TXT</button></div>':"";document.getElementById("statsBar").innerHTML='<div class="stats-metrics"><span class="stat-item"><span class="stat-dot" style="background:var(--accent)"></span>总计: <span class="stat-value">'+(data.total||0).toLocaleString()+'</span></span><span class="stat-item"><span class="stat-dot" style="background:var(--success)"></span>独立IP: <span class="stat-value">'+(data.unique_ips||0).toLocaleString()+'</span></span><span class="stat-item"><span class="stat-dot" style="background:var(--warning)"></span>结果: <span class="stat-value">'+rows.length.toLocaleString()+'</span></span></div>'+actions;var cols=data.columns||[];if(cols.length===0&&rows.length>0)cols=Object.keys(rows[0]);currentColumns=cols;if(rows.length===0){table.style.display="none";empty.style.display="block";empty.textContent=excludedFilters.length?"所有结果已被「不看」排除，移除排除项可恢复显示。":((data.total||0)>0?"当前预览没有返回记录，可调大数量或更换字段后重试。":"没有匹配结果。");document.querySelector("#resultsTable thead").innerHTML="";document.querySelector("#resultsTable tbody").innerHTML="";updateLayout();return}table.style.display="table";empty.style.display="none";var thead="";cols.forEach(function(col){var sc=sortColumn===col?" sorted":"";thead+="<th class=\""+sc+"\" onclick=\"sortBy('"+escHtml(col)+"')\">"+(sortColumn===col?(sortAsc?"▲ ":"▼ "):"")+escHtml(col)+"</th>"});document.querySelector("#resultsTable thead").innerHTML="<tr>"+thead+"</tr>";currentView=rows;vsLastWindow=null;stabilizeColumnWidths();setupVirtualScroll();updateLayout();renderVirtual()}
+function renderResults(data){var area=document.getElementById("resultsArea"),rows=data.results||[],table=document.getElementById("resultsTable"),empty=document.getElementById("emptyState");previewRendered=true;syncModeContent();var pickBtns='<button class="mini-btn" id="pickFilterBtn" onclick="enterPickMode(\'filter\')">不看</button><button class="mini-btn" id="pickQueryBtn" onclick="enterPickMode(\'query\')">选取查询</button>';var actions=rows.length>0?'<div class="stats-actions"><span class="preview-status" id="previewStatus"></span>'+pickBtns+'<button class="mini-btn" onclick="exportPreview(&quot;csv&quot;)">导出 CSV</button><button class="mini-btn" onclick="exportPreview(&quot;json&quot;)">JSON</button><button class="mini-btn" onclick="exportPreview(&quot;txt&quot;)">TXT</button></div>':(excludedFilters.length?'<div class="stats-actions"><span class="preview-status" id="previewStatus"></span></div>':"");document.getElementById("statsBar").innerHTML='<div class="stats-metrics"><span class="stat-item"><span class="stat-dot" style="background:var(--accent)"></span>总计: <span class="stat-value">'+(data.total||0).toLocaleString()+'</span></span><span class="stat-item"><span class="stat-dot" style="background:var(--success)"></span>独立IP: <span class="stat-value">'+(data.unique_ips||0).toLocaleString()+'</span></span><span class="stat-item"><span class="stat-dot" style="background:var(--warning)"></span>结果: <span class="stat-value">'+rows.length.toLocaleString()+'</span></span></div>'+actions;var cols=data.columns||[];if(cols.length===0&&rows.length>0)cols=Object.keys(rows[0]);currentColumns=cols;if(rows.length===0){table.style.display="none";empty.style.display="block";empty.textContent=excludedFilters.length?"所有结果已被「不看」排除，移除排除项可恢复显示。":((data.total||0)>0?"当前预览没有返回记录，可调大数量或更换字段后重试。":"没有匹配结果。");document.querySelector("#resultsTable thead").innerHTML="";document.querySelector("#resultsTable tbody").innerHTML="";updateLayout();return}table.style.display="table";empty.style.display="none";var thead="";cols.forEach(function(col){var sc=sortColumn===col?" sorted":"";thead+="<th class=\""+sc+"\" onclick=\"sortBy('"+escHtml(col)+"')\">"+(sortColumn===col?(sortAsc?"▲ ":"▼ "):"")+escHtml(col)+"</th>"});document.querySelector("#resultsTable thead").innerHTML="<tr>"+thead+"</tr>";currentView=rows;vsLastWindow=null;stabilizeColumnWidths();setupVirtualScroll();updateLayout();renderVirtual()}
 function buildRowsHtml(pageRows,cols){var html="";pageRows.forEach(function(row){html+="<tr>";cols.forEach(function(col){var val=row[col]!==undefined?row[col]:"",cls=(col==="ip"||col==="port"||col==="host")?" mono":"";if((col==="host"||col==="url")&&val){var url=val.indexOf("http")===0?val:"http://"+val;html+='<td class="'+escAttr(cls)+'"><a href="'+escAttr(url)+'" target="_blank" rel="noopener">'+escHtml(val)+"</a></td>"}else html+='<td class="'+escAttr(cls)+'" title="'+escAttr(val)+'">'+escHtml(val)+"</td>"});html+="</tr>"});return html}
 function getScrollBox(){return document.getElementById("resultsTable").parentElement}
 function measureRowHeight(){var cols=currentColumns,probe=currentView[0]||{},tbody=document.querySelector("#resultsTable tbody");var n=Math.min(8,currentView.length||1),rows=[];for(var k=0;k<n;k++)rows.push(probe);tbody.innerHTML=buildRowsHtml(rows,cols);vsLastWindow=null;var h=tbody.offsetHeight;return h>0?h/n:31}
@@ -468,7 +495,7 @@ function previewRows(){var cols=previewColumns(),src=currentResults;if(excludedF
 function csvCell(v){var s=v===undefined||v===null?"":String(v);return /[",\r\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}
 function previewUrl(row){var val=row.url||row.link||row.host||"";if(!val&&row.ip)val=row.ip;if(val&&row.host&&String(val).indexOf("http")!==0){var protocol=row.protocol?String(row.protocol).toLowerCase():"";if(protocol.indexOf(",")>-1)protocol=protocol.split(",")[0];if(!protocol)protocol=String(row.port)==="443"?"https":"http";val=protocol+"://"+val}return val}
 function downloadPreviewBlob(content,filename,type){var blob=new Blob([content],{type:type}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(function(){URL.revokeObjectURL(url)},1000)}
-function showPreviewStatus(text){var el=document.getElementById("previewStatus");if(el){el.textContent=text;updateLayout()}else showMessage("info",text)}
+function showPreviewStatus(text){var el=document.getElementById("previewStatus");if(el){el.textContent=text;updateLayout()}}
 function exportPreview(format){if(!currentResults.length){showMessage("error","当前预览没有可导出的结果");return}var cols=previewColumns(),rows=previewRows(),ts=previewTimestamp(),content="",filename="fofatoto_preview_"+ts+"."+format,type="text/plain;charset=utf-8";var src=currentResults;if(excludedFilters.length){src=src.filter(function(r){return !excludedFilters.some(function(f){return String(r[f.field]||"")===String(f.value)})})}var exportedCount=0;if(format==="csv"){content="\ufeff"+[cols.map(csvCell).join(",")].concat(rows.map(function(row){return cols.map(function(col){return csvCell(row[col])}).join(",")})).join("\r\n")+"\r\n";type="text/csv;charset=utf-8";exportedCount=rows.length}else if(format==="json"){content=JSON.stringify(rows,null,2)+"\n";type="application/json;charset=utf-8";exportedCount=rows.length}else{var values;if(cols.length===1&&cols[0]==="ip")values=src.map(function(row){return row.ip||""});else if(cols.length===1&&cols[0]==="domain")values=src.map(function(row){return row.domain||""});else values=src.map(previewUrl);values=values.filter(function(v){return v});exportedCount=values.length;content=values.join("\n")+"\n"}downloadPreviewBlob(content,filename,type);clearMessage();showPreviewStatus("已导出 "+exportedCount.toLocaleString()+" 条")}
 function sortValueCompare(a,b){var na=Number(a),nb=Number(b);if(a!==""&&b!==""&&!isNaN(na)&&!isNaN(nb))return na<nb?-1:(na>nb?1:0);return a<b?-1:(a>b?1:0)}
 function sortBy(col){if(sortColumn===col){sortAsc=!sortAsc}else{sortColumn=col;sortAsc=true}currentResults.sort(function(a,b){var r=sortValueCompare(a[col]||"",b[col]||"");return sortAsc?r:-r});renderCurrentView()}
@@ -829,6 +856,321 @@ def _detect_relay_info_api(base_url: str, key: str) -> str:
                 "{key}", quote(key, safe="")
             )
     return ""
+
+
+# ============ Icon 提取与 icon_hash ============
+
+class IconExtractError(Exception):
+    """favicon 提取 / icon_hash 计算失败"""
+
+    pass
+
+
+_ICON_HASH_RE = re.compile(r"^-?\d+$")
+_FETCH_TIMEOUT = 10
+_MAX_HTML_BYTES = 2 * 1024 * 1024
+_MAX_ICON_BYTES = 5 * 1024 * 1024
+_ICON_PREVIEW_MAX_BYTES = 512 * 1024
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
+
+def _murmur3_32(data: bytes, seed: int = 0) -> int:
+    """MurmurHash3 x86_32（纯 Python 实现），返回有符号 32 位整数。
+
+    Shodan/FOFA 的 icon_hash 即 mmh3.hash() 的输出格式（负数很常见），
+    标准库无 mmh3，故自实现以保持零依赖。
+    """
+    c1, c2 = 0xCC9E2D51, 0x1B873593
+    h = seed & 0xFFFFFFFF
+    nblocks = len(data) & ~3
+    for i in range(0, nblocks, 4):
+        k = int.from_bytes(data[i : i + 4], "little")
+        k = (k * c1) & 0xFFFFFFFF
+        k = ((k << 15) | (k >> 17)) & 0xFFFFFFFF
+        k = (k * c2) & 0xFFFFFFFF
+        h ^= k
+        h = ((h << 13) | (h >> 19)) & 0xFFFFFFFF
+        h = (h * 5 + 0xE6546B64) & 0xFFFFFFFF
+    tail = data[nblocks:]
+    k = 0
+    if len(tail) >= 3:
+        k ^= tail[2] << 16
+    if len(tail) >= 2:
+        k ^= tail[1] << 8
+    if tail:
+        k ^= tail[0]
+        k = (k * c1) & 0xFFFFFFFF
+        k = ((k << 15) | (k >> 17)) & 0xFFFFFFFF
+        k = (k * c2) & 0xFFFFFFFF
+        h ^= k
+    h ^= len(data)
+    h ^= h >> 16
+    h = (h * 0x85EBCA6B) & 0xFFFFFFFF
+    h ^= h >> 13
+    h = (h * 0xC2B2AE35) & 0xFFFFFFFF
+    h ^= h >> 16
+    return h - 0x100000000 if h & 0x80000000 else h
+
+
+def favicon_hash(icon_bytes: bytes) -> str:
+    """计算 FOFA/Shodan 约定的 icon_hash。
+
+    编码用 base64.encodebytes（76 列换行 + 结尾换行），编码结果整体参与
+    哈希，与 mmh3.hash(base64.encodebytes(icon)) 对齐。
+    """
+    return str(_murmur3_32(base64.encodebytes(icon_bytes)))
+
+
+def build_icon_query(icon_hash: str, extra: str = "") -> str:
+    """拼接 icon_hash 查询；extra 为附加过滤条件，自动加括号防外溢"""
+    query = f'icon_hash="{icon_hash}"'
+    extra = (extra or "").strip()
+    if extra:
+        query = f"{query} && ({extra})"
+    return query
+
+
+class _IconLinkParser(HTMLParser):
+    """从 HTML 中提取 <link rel=...icon...> 的 href，按 rel 优先级取最优"""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.icon_href: Optional[str] = None
+        self._best_rank = 1 << 30
+
+    @staticmethod
+    def _rank(rel: str) -> int:
+        tokens = set((rel or "").lower().split())
+        if "icon" in tokens:
+            return 0 if "shortcut" in tokens else 1
+        if "apple-touch-icon-precomposed" in tokens:
+            return 2
+        if "apple-touch-icon" in tokens:
+            return 3
+        return -1
+
+    def handle_starttag(self, tag, attrs):
+        if tag.lower() != "link":
+            return
+        attr = {k.lower(): (v or "") for k, v in attrs}
+        href = attr.get("href", "").strip()
+        if not href:
+            return
+        rank = self._rank(attr.get("rel", ""))
+        if 0 <= rank < self._best_rank:
+            self._best_rank = rank
+            self.icon_href = href
+
+
+def _decode_data_uri(href: str) -> Optional[bytes]:
+    if not href.lower().startswith("data:"):
+        return None
+    try:
+        header, sep, payload = href.partition(",")
+        if not sep:
+            return None
+        if ";base64" in header.lower():
+            return base64.b64decode(re.sub(r"\s+", "", payload))
+        return unquote_to_bytes(payload)
+    except Exception:
+        return None
+
+
+def _guess_content_type(data: bytes) -> str:
+    if data.startswith(b"\x89PNG"):
+        return "image/png"
+    if data.startswith(b"GIF8"):
+        return "image/gif"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    head = data.lstrip()[:256].lower()
+    if head.startswith(b"<svg") or (head.startswith(b"<?xml") and b"<svg" in head):
+        return "image/svg+xml"
+    return "image/x-icon"
+
+
+def _looks_like_icon(data: bytes, ctype: str) -> bool:
+    if ctype.startswith("image/"):
+        return True
+    if "html" in ctype or not data:
+        return False
+    if data.startswith((b"\x00\x00\x01\x00", b"\x00\x00\x02\x00")):
+        return True
+    if data.startswith((b"\x89PNG", b"GIF8", b"\xff\xd8\xff")):
+        return True
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return True
+    return _guess_content_type(data) == "image/svg+xml"
+
+
+def _fetch_url(url: str, max_bytes: int, accept: str = "*/*") -> tuple[bytes, str, str]:
+    """下载 URL 内容，返回 (bytes, 最终 URL, content_type)。仅允许 http/https。"""
+    if urlparse(url).scheme.lower() not in ("http", "https"):
+        raise IconExtractError(f"仅支持 http/https: {url}")
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": _BROWSER_UA, "Accept": accept, "Accept-Language": "zh-CN,zh;q=0.9"},
+    )
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT, context=ctx) as resp:
+            data = resp.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                raise IconExtractError(f"响应超过大小上限 {max_bytes // (1024 * 1024)}MB: {url}")
+            ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            return data, resp.geturl(), ctype
+    except IconExtractError:
+        raise
+    except urllib.error.HTTPError as e:
+        raise IconExtractError(f"HTTP {e.code} {e.reason}: {url}")
+    except urllib.error.URLError as e:
+        reason = getattr(e, "reason", e)
+        if isinstance(reason, (socket.timeout, TimeoutError)):
+            raise IconExtractError(f"连接超时: {url}")
+        if isinstance(reason, socket.gaierror):
+            raise IconExtractError(f"域名解析失败: {url}")
+        raise IconExtractError(f"连接失败: {reason}: {url}")
+    except (socket.timeout, TimeoutError):
+        raise IconExtractError(f"连接超时: {url}")
+    except Exception as e:
+        raise IconExtractError(f"抓取失败: {e}: {url}")
+
+
+def _resolve_icon_from_url(url: str) -> tuple[bytes, str, str]:
+    """抓取网页解析 icon 标签；目标本身是图片时直接作为 icon。
+
+    返回 (icon_bytes, icon 来源 URL, content_type)。
+    """
+    # 直接图片目标按图标上限（5MB）抓取；确认为 HTML 后再单独施加 HTML 上限
+    data, final_url, ctype = _fetch_url(
+        url, _MAX_ICON_BYTES, accept="text/html,application/xhtml+xml,image/*;q=0.8,*/*;q=0.5"
+    )
+    if _looks_like_icon(data, ctype):
+        return data, final_url, ctype or _guess_content_type(data)
+    if len(data) > _MAX_HTML_BYTES:
+        raise IconExtractError(
+            f"HTML 响应超过大小上限 {_MAX_HTML_BYTES // (1024 * 1024)}MB: {url}"
+        )
+
+    parser = _IconLinkParser()
+    try:
+        parser.feed(data.decode("utf-8", errors="replace"))
+        parser.close()
+    except Exception:
+        pass
+
+    candidates = []
+    if parser.icon_href:
+        candidates.append(parser.icon_href)
+    candidates.append(urljoin(final_url, "/favicon.ico"))
+
+    last_error: Optional[Exception] = None
+    for href in candidates:
+        try:
+            if href.lower().startswith("data:"):
+                raw = _decode_data_uri(href)
+                if not raw:
+                    continue
+                return raw, "(data: URI)", _guess_content_type(raw)
+            icon_url = urljoin(final_url, href)
+            raw, icon_final, icon_ctype = _fetch_url(icon_url, _MAX_ICON_BYTES, accept="image/*,*/*;q=0.8")
+            return raw, icon_final, icon_ctype or _guess_content_type(raw)
+        except Exception as e:
+            last_error = e
+            continue
+    if last_error:
+        raise IconExtractError(f"页面未找到可用图标（{last_error}）")
+    raise IconExtractError(f"页面未找到可用图标: {url}")
+
+
+def resolve_icon(target: str, allow_file: bool = True) -> dict:
+    """解析目标的 favicon 并计算 icon_hash。
+
+    target 支持三种形态：
+    1. 原始 icon_hash 整数（-?\\d+）→ 直接返回，不产生网络请求
+    2. 本地 icon 文件路径（仅 allow_file=True 的 CLI 场景）
+    3. 网址（缺 scheme 时先补 https://，失败回退 http://；也可以直接
+       指向图片 URL，如 https://x.com/favicon.ico）
+    """
+    target = (target or "").strip()
+    if not target:
+        raise IconExtractError("目标为空")
+
+    def _result(icon_bytes: bytes, icon_url: str, ctype: str, source: str, icon_hash: str = "") -> dict:
+        icon_hash = icon_hash or favicon_hash(icon_bytes)
+        preview = ""
+        if icon_bytes and len(icon_bytes) <= _ICON_PREVIEW_MAX_BYTES:
+            b64 = base64.b64encode(icon_bytes).decode()
+            preview = f"data:{ctype or _guess_content_type(icon_bytes)};base64,{b64}"
+        return {
+            "target": target,
+            "source": source,
+            "icon_hash": icon_hash,
+            "icon_md5": hashlib.md5(icon_bytes).hexdigest() if icon_bytes else "",
+            "icon_url": icon_url,
+            "icon_size": len(icon_bytes),
+            "content_type": ctype,
+            "icon_bytes": icon_bytes,
+            "icon_data_uri": preview,
+        }
+
+    if _ICON_HASH_RE.match(target):
+        return _result(b"", "", "", "hash", icon_hash=target)
+
+    if allow_file:
+        path = Path(target)
+        if path.is_file():
+            raw = path.read_bytes()
+            if len(raw) > _MAX_ICON_BYTES:
+                raise IconExtractError(f"icon 文件超过大小上限 {_MAX_ICON_BYTES // (1024 * 1024)}MB")
+            return _result(raw, str(path), _guess_content_type(raw), "file")
+
+    if re.match(r"^https?://", target, re.I):
+        attempts = [target]
+    elif "://" in target:
+        raise IconExtractError(f"仅支持 http/https: {target}")
+    else:
+        attempts = [f"https://{target}", f"http://{target}"]
+
+    errors = []
+    for url in attempts:
+        try:
+            raw, icon_url, ctype = _resolve_icon_from_url(url)
+            return _result(raw, icon_url, ctype, "url")
+        except IconExtractError as e:
+            errors.append(str(e))
+        except Exception as e:
+            errors.append(f"{e}: {url}")
+    raise IconExtractError("；".join(errors))
+
+
+_ICON_CACHE: dict[str, dict] = {}
+_ICON_CACHE_MAX = 64
+_ICON_CACHE_LOCK = threading.Lock()
+
+
+def resolve_icon_cached(target: str) -> dict:
+    """resolve_icon 的带缓存版本（Web 端用，禁用本地文件输入）"""
+    key = (target or "").strip()
+    with _ICON_CACHE_LOCK:
+        hit = _ICON_CACHE.get(key)
+    if hit is not None:
+        return hit
+    info = resolve_icon(key, allow_file=False)
+    # 接口只需要派生字段与预览，缓存剔除原始 icon_bytes，避免长驻内存膨胀
+    info = {k: v for k, v in info.items() if k != "icon_bytes"}
+    with _ICON_CACHE_LOCK:
+        while len(_ICON_CACHE) >= _ICON_CACHE_MAX:
+            _ICON_CACHE.pop(next(iter(_ICON_CACHE)))
+        _ICON_CACHE[key] = info
+    return info
 
 
 class FofaClient:
@@ -1627,10 +1969,13 @@ def build_parser():
   %(prog)s "domain=baidu.com" -l max -o all.csv   # 导出全部匹配数据
   %(prog)s "ip=1.1.1.1/24" -json -o ips.json      # 输出 JSON 格式
   %(prog)s "domain=baidu.com" -f "ip,port"        # 指定查询字段
+  %(prog)s --icon https://example.com              # 查询使用相同图标的网站（同框架/同产品）
+  %(prog)s --icon https://example.com "port=443"   # Icon 同款 + 附加过滤条件
+  %(prog)s --icon ./favicon.ico -l max -csv        # 本地 icon 文件直接导出
   %(prog)s -c                                      # 快速检测账户状态
         """,
     )
-    parser.add_argument("query", nargs="?", help="FOFA 查询语句，如: domain=baidu.com")
+    parser.add_argument("query", nargs="?", help="FOFA 查询语句，如: domain=baidu.com（--icon 模式下作为附加过滤条件）")
     parser.add_argument("-o", "--output", help="输出文件名（含后缀），如 results.csv")
     parser.add_argument(
         "-l",
@@ -1669,6 +2014,12 @@ def build_parser():
     parser.add_argument(
         "--dedup",
         help="根据指定字段去重，多个字段用逗号分隔，如 --dedup ip 或 --dedup ip,host",
+    )
+    parser.add_argument(
+        "-i",
+        "--icon",
+        metavar="TARGET",
+        help="Icon 同款查询：网站地址 / 本地 icon 文件 / 已知 icon_hash 整数，自动提取 icon_hash 并查询使用相同图标的网站（同框架/同产品）",
     )
     parser.add_argument("--full", action="store_true", help="搜索全部数据（不止一年）")
     parser.add_argument("-v", "--verbose", action="store_true", help="显示详细信息")
@@ -1787,6 +2138,23 @@ def handle_batch_mode(client: FofaClient, args):
     except Exception as e:
         print(f"[-] 错误: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+def handle_icon_mode(client: FofaClient, args):
+    """Icon 同款查询：提取目标 favicon 的 icon_hash 后走单查询链路"""
+    try:
+        info = resolve_icon(args.icon)
+    except IconExtractError as e:
+        print(f"[-] icon 提取失败: {e}", file=sys.stderr)
+        print("[*] 可改用本地 icon 文件或已知 icon_hash 整数重试", file=sys.stderr)
+        sys.exit(1)
+
+    source = info["icon_url"] or args.icon
+    size_note = f"{info['icon_size']} bytes" if info["icon_size"] else "raw hash"
+    print(f"[*] icon_hash={info['icon_hash']}（来源 {source}，{size_note}）")
+    args.query = build_icon_query(info["icon_hash"], args.query)
+    print(f"[*] 查询语句: {args.query}")
+    handle_single_mode(client, args)
 
 
 def handle_single_mode(client: FofaClient, args):
@@ -2259,6 +2627,8 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
 
         if path == "/api/search":
             self._handle_search()
+        elif path == "/api/icon":
+            self._handle_icon()
         elif path == "/api/export":
             self._handle_export()
         elif path == "/api/batch":
@@ -2328,6 +2698,32 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                 }
             )
         except FofaAPIError as e:
+            self._send_error(e)
+        except Exception as e:
+            self._send_error(e)
+
+    def _handle_icon(self):
+        try:
+            body = self._read_body()
+            target = str(body.get("target", "")).strip()
+            if not target:
+                self._send_error("Target is required")
+                return
+            info = resolve_icon_cached(target)
+            self._send_json(
+                {
+                    "success": True,
+                    "data": {
+                        "icon_hash": info["icon_hash"],
+                        "icon_md5": info["icon_md5"],
+                        "icon_url": info["icon_url"],
+                        "icon_size": info["icon_size"],
+                        "icon_data_uri": info["icon_data_uri"],
+                        "source": info["source"],
+                    },
+                }
+            )
+        except IconExtractError as e:
             self._send_error(e)
         except Exception as e:
             self._send_error(e)
@@ -2824,7 +3220,13 @@ class FofaWebServer:
 def main():
     parser = build_parser()
     args = parser.parse_args()
-    web_mode = args.web or (not args.query and not args.batch_file and not args.check)
+    if args.icon and args.web:
+        print("[!] --icon 与 -w/--web 不能同时使用", file=sys.stderr)
+        sys.exit(1)
+    if args.icon and args.batch_file:
+        print("[!] --icon 与 -b/--batch 不能同时使用", file=sys.stderr)
+        sys.exit(1)
+    web_mode = args.web or (not args.query and not args.batch_file and not args.check and not args.icon)
 
     config_manager = ConfigManager()
     config_file_ready = config_manager.ensure_exists()
@@ -2882,6 +3284,8 @@ def main():
 
     if args.batch_file:
         handle_batch_mode(client, args)
+    elif args.icon:
+        handle_icon_mode(client, args)
     else:
         if not args.query:
             sys.stderr.write(parser.format_usage())

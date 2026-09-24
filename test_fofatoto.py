@@ -8,12 +8,15 @@ monkeypatch urlopen 模拟。）
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
+import socket
 import tempfile
 import time
 import unittest
+import urllib.error
 import urllib.request
 from pathlib import Path
 from unittest import mock
@@ -681,6 +684,329 @@ class VersionSyncTest(unittest.TestCase):
         self.assertIsNotNone(m_lock)
         self.assertEqual(fofatoto.APP_VERSION, m_py.group(1))
         self.assertEqual(fofatoto.APP_VERSION, m_lock.group(1))
+
+
+class FakeHTTPResponse:
+    """图标抓取用 urlopen 返回替身（支持 with 上下文与 read(n)）"""
+
+    def __init__(self, data: bytes, url: str, ctype: str = "text/html"):
+        self._data = data
+        self._url = url
+        self.headers = {"Content-Type": ctype}
+
+    def read(self, n: int = -1) -> bytes:
+        return self._data if n is None or n < 0 else self._data[:n]
+
+    def geturl(self) -> str:
+        return self._url
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class MurmurHashTest(unittest.TestCase):
+    """纯 Python MurmurHash3 x86_32 与 icon_hash（对照 mmh3 输出的固定向量）"""
+
+    VECTORS = [
+        (b"", 0),
+        (b"f", 728008763),
+        (b"fo", 382126120),
+        (b"foo", -156908512),
+        (b"abcd", 1139631978),
+        (b"abcde", -392455434),
+        (b"abcdefgh", 1239272644),
+    ]
+
+    def test_murmur3_vectors(self):
+        for data, expected in self.VECTORS:
+            self.assertEqual(fofatoto._murmur3_32(data), expected, data)
+
+    def test_murmur3_signed(self):
+        self.assertLess(fofatoto._murmur3_32(b"foo"), 0)
+
+    def test_favicon_hash_vectors(self):
+        self.assertEqual(fofatoto.favicon_hash(b"f"), "1774577129")
+        self.assertEqual(fofatoto.favicon_hash(b"fo"), "510855658")
+        self.assertEqual(fofatoto.favicon_hash(b"foo"), "851989093")
+        self.assertEqual(fofatoto.favicon_hash(b"abcd"), "1391944941")
+        self.assertEqual(fofatoto.favicon_hash(b"abcde"), "-1251247445")
+        self.assertEqual(fofatoto.favicon_hash(b"abcdefgh"), "1250291458")
+
+    def test_favicon_hash_uses_newline_wrapped_base64(self):
+        # Shodan/FOFA 约定：base64.encodebytes 产生 "Zm9v\n"（含换行），与 b64encode 的 "Zm9v" 哈希不同
+        self.assertEqual(fofatoto.favicon_hash(b"foo"), str(fofatoto._murmur3_32(b"Zm9v\n")))
+        self.assertNotEqual(fofatoto.favicon_hash(b"foo"), str(fofatoto._murmur3_32(b"Zm9v")))
+
+
+class BuildIconQueryTest(unittest.TestCase):
+    def test_without_extra(self):
+        self.assertEqual(fofatoto.build_icon_query("-123"), 'icon_hash="-123"')
+
+    def test_extra_wrapped_in_parentheses(self):
+        self.assertEqual(
+            fofatoto.build_icon_query("5", "port=443"),
+            'icon_hash="5" && (port=443)',
+        )
+
+    def test_extra_or_never_escapes(self):
+        self.assertEqual(
+            fofatoto.build_icon_query("5", 'a="1" || b="2"'),
+            'icon_hash="5" && (a="1" || b="2")',
+        )
+
+
+class IconLinkParserTest(unittest.TestCase):
+    @staticmethod
+    def parse(html):
+        p = fofatoto._IconLinkParser()
+        p.feed(html)
+        p.close()
+        return p.icon_href
+
+    def test_shortcut_icon_wins(self):
+        html = (
+            '<link rel="apple-touch-icon" href="a.png">'
+            '<link rel="icon" href="b.ico">'
+            '<link rel="shortcut icon" href="c.ico">'
+        )
+        self.assertEqual(self.parse(html), "c.ico")
+
+    def test_icon_over_apple_touch(self):
+        html = '<link rel="apple-touch-icon" href="a.png"><link rel="icon" href="b.ico">'
+        self.assertEqual(self.parse(html), "b.ico")
+
+    def test_first_wins_same_rank(self):
+        html = '<link rel="icon" href="first.ico"><link rel="icon" href="second.ico">'
+        self.assertEqual(self.parse(html), "first.ico")
+
+    def test_entity_in_href_decoded(self):
+        self.assertEqual(self.parse('<link rel="icon" href="/i?a=1&amp;b=2">'), "/i?a=1&b=2")
+
+    def test_ignores_non_icon(self):
+        self.assertIsNone(self.parse('<link rel="stylesheet" href="s.css"><a href="x">y</a>'))
+        self.assertIsNone(self.parse("<div>no links</div>"))
+
+
+class DataUriAndSniffTest(unittest.TestCase):
+    def test_decode_data_uri(self):
+        self.assertEqual(fofatoto._decode_data_uri("data:image/png;base64,YQ=="), b"a")
+        self.assertEqual(fofatoto._decode_data_uri("data:image/svg+xml,%3Csvg%3E"), b"<svg>")
+
+    def test_decode_data_uri_invalid(self):
+        # 非字母表字符被 b64decode 忽略成空字节（调用方按空值跳过）；截断输入抛异常转 None
+        self.assertFalse(fofatoto._decode_data_uri("data:image/png;base64,!!!"))
+        self.assertIsNone(fofatoto._decode_data_uri("data:image/png;base64,Y"))
+        self.assertIsNone(fofatoto._decode_data_uri("data:image/png;base64"))
+        self.assertIsNone(fofatoto._decode_data_uri("/relative.png"))
+
+    def test_content_type_and_sniffing(self):
+        self.assertEqual(fofatoto._guess_content_type(b"\x89PNG\r\n"), "image/png")
+        self.assertEqual(fofatoto._guess_content_type(b"GIF89a"), "image/gif")
+        self.assertEqual(fofatoto._guess_content_type(b"\xff\xd8\xff\xe0"), "image/jpeg")
+        self.assertEqual(fofatoto._guess_content_type(b"RIFF\x00\x00\x00\x00WEBPVP8 "), "image/webp")
+        self.assertEqual(fofatoto._guess_content_type(b"<svg xmlns=''></svg>"), "image/svg+xml")
+        self.assertEqual(fofatoto._guess_content_type(b"\x00\x00\x01\x00rest"), "image/x-icon")
+        self.assertTrue(fofatoto._looks_like_icon(b"\x89PNG\r\n", "application/octet-stream"))
+        self.assertTrue(fofatoto._looks_like_icon(b"anything", "image/png"))
+        self.assertTrue(fofatoto._looks_like_icon(b"<svg/>", ""))
+        self.assertFalse(fofatoto._looks_like_icon(b"<!DOCTYPE html>rest", "text/html"))
+        self.assertFalse(fofatoto._looks_like_icon(b"", ""))
+
+
+class ResolveIconTest(unittest.TestCase):
+    """resolve_icon 提取管线（monkeypatch urlopen，不发真实请求）"""
+
+    PNG = b"\x89PNG\r\n\x1a\n" + b"rest-of-png"
+    ICO = b"\x00\x00\x01\x00" + b"rest-of-ico"
+
+    @staticmethod
+    def _run(target, routes, allow_file=True, calls=None):
+        def fake_urlopen(req, timeout=None, context=None):
+            url = getattr(req, "full_url", req)
+            if calls is not None:
+                calls.append(url)
+            val = routes.get(url)  # 精确匹配请求 URL，避免子串误路由
+            if val is None:
+                raise urllib.error.URLError("no route for " + url)
+            if isinstance(val, Exception):
+                raise val
+            return val
+
+        with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
+            return fofatoto.resolve_icon(target, allow_file=allow_file)
+
+    def test_raw_hash_passthrough(self):
+        calls = []
+        info = self._run("-247388550", {}, calls=calls)
+        self.assertEqual(info["icon_hash"], "-247388550")
+        self.assertEqual(info["source"], "hash")
+        self.assertEqual(info["icon_bytes"], b"")
+        self.assertEqual(calls, [])
+
+    def test_local_file(self):
+        with tempfile.NamedTemporaryFile(suffix=".ico", delete=False) as fh:
+            fh.write(self.ICO)
+            path = fh.name
+        try:
+            info = self._run(path, {}, calls=[])
+            self.assertEqual(info["source"], "file")
+            self.assertEqual(info["icon_hash"], fofatoto.favicon_hash(self.ICO))
+            self.assertEqual(info["icon_size"], len(self.ICO))
+        finally:
+            os.unlink(path)
+
+    def test_html_link_preferred_over_favicon_ico(self):
+        routes = {
+            "https://example.com": FakeHTTPResponse(
+                b'<html><link rel="shortcut icon" href="/custom.png"></html>',
+                "https://example.com/", "text/html",
+            ),
+            "https://example.com/custom.png": FakeHTTPResponse(
+                self.PNG, "https://example.com/custom.png", "image/png"
+            ),
+        }
+        info = self._run("https://example.com", routes)
+        self.assertTrue(info["icon_url"].endswith("/custom.png"))
+        self.assertEqual(info["icon_bytes"], self.PNG)
+        self.assertEqual(info["icon_hash"], fofatoto.favicon_hash(self.PNG))
+
+    def test_rel_priority_icon_over_apple_touch(self):
+        routes = {
+            "https://example.com": FakeHTTPResponse(
+                b'<link rel="apple-touch-icon" href="a.png"><link rel="icon" href="b.png">',
+                "https://example.com/", "text/html",
+            ),
+            "https://example.com/b.png": FakeHTTPResponse(
+                self.PNG, "https://example.com/b.png", "image/png"
+            ),
+        }
+        info = self._run("https://example.com", routes)
+        self.assertTrue(info["icon_url"].endswith("/b.png"))
+
+    def test_data_uri_link(self):
+        b64 = base64.b64encode(self.PNG).decode()
+        routes = {
+            "https://example.com": FakeHTTPResponse(
+                ('<link rel="icon" href="data:image/png;base64,%s">' % b64).encode(),
+                "https://example.com/", "text/html",
+            ),
+        }
+        info = self._run("https://example.com", routes)
+        self.assertEqual(info["icon_url"], "(data: URI)")
+        self.assertEqual(info["icon_bytes"], self.PNG)
+
+    def test_favicon_ico_fallback(self):
+        calls = []
+        routes = {
+            "https://example.com/favicon.ico": FakeHTTPResponse(
+                self.ICO, "https://example.com/favicon.ico", "image/x-icon"
+            ),
+            "https://example.com": FakeHTTPResponse(b"<html>no icon</html>", "https://example.com/", "text/html"),
+        }
+        info = self._run("https://example.com", routes, calls=calls)
+        self.assertTrue(info["icon_url"].endswith("/favicon.ico"))
+        self.assertEqual(info["icon_bytes"], self.ICO)
+        self.assertTrue(any("favicon.ico" in u for u in calls))
+
+    def test_direct_image_url(self):
+        routes = {
+            "https://example.com/logo.ico": FakeHTTPResponse(
+                self.ICO, "https://example.com/logo.ico", "image/x-icon"
+            ),
+        }
+        info = self._run("https://example.com/logo.ico", routes)
+        self.assertEqual(info["icon_bytes"], self.ICO)
+        self.assertEqual(info["source"], "url")
+
+    def test_https_falls_back_to_http(self):
+        routes = {
+            "https://bare-site.com": urllib.error.URLError("connection refused"),
+            "http://bare-site.com": FakeHTTPResponse(self.PNG, "http://bare-site.com/icon.png", "image/png"),
+        }
+        info = self._run("bare-site.com", routes)
+        self.assertTrue(info["icon_url"].startswith("http://bare-site.com"))
+        self.assertEqual(info["icon_bytes"], self.PNG)
+
+    def test_unsupported_scheme(self):
+        with self.assertRaises(fofatoto.IconExtractError) as cm:
+            self._run("ftp://example.com/x.ico", {}, allow_file=False)
+        self.assertIn("仅支持 http/https", str(cm.exception))
+
+    def test_allow_file_false_never_reads_local(self):
+        with tempfile.NamedTemporaryFile(suffix=".ico", delete=False) as fh:
+            fh.write(self.ICO)
+            path = fh.name
+
+        def fake_urlopen(req, timeout=None, context=None):
+            raise urllib.error.URLError("network disabled")
+
+        try:
+            with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
+                with self.assertRaises(fofatoto.IconExtractError):
+                    fofatoto.resolve_icon(path, allow_file=False)
+        finally:
+            os.unlink(path)
+
+    def test_dns_error_classified(self):
+        routes = {
+            "https://does-not-exist.example": urllib.error.URLError(socket.gaierror(-2, "Name or service not known")),
+        }
+        with self.assertRaises(fofatoto.IconExtractError) as cm:
+            self._run("does-not-exist.example", routes)
+        self.assertIn("域名解析失败", str(cm.exception))
+
+    def test_direct_image_uses_icon_limit_html_uses_html_limit(self):
+        # PR #2 复核意见：2–5MB 直接图片按图标上限放行，HTML 单独施加小上限
+        big_img = b"\x89PNG\r\n\x1a\n" + b"x" * 150
+        big_html = b"<html>" + b"y" * 150 + b"</html>"
+        routes = {
+            "https://example.com/img.png": FakeHTTPResponse(big_img, "https://example.com/img.png", "image/png"),
+            "https://example.com/page": FakeHTTPResponse(big_html, "https://example.com/page", "text/html"),
+        }
+        with mock.patch.object(fofatoto, "_MAX_HTML_BYTES", 100), mock.patch.object(
+            fofatoto, "_MAX_ICON_BYTES", 1000
+        ):
+            info = self._run("https://example.com/img.png", routes)
+            self.assertEqual(info["icon_size"], len(big_img))
+            with self.assertRaises(fofatoto.IconExtractError) as cm:
+                self._run("https://example.com/page", routes)
+            self.assertIn("HTML 响应超过大小上限", str(cm.exception))
+
+    def test_icon_fetch_limit_enforced(self):
+        huge = b"\x00\x00\x01\x00" + b"x" * 200
+        routes = {"https://example.com/logo.ico": FakeHTTPResponse(huge, "https://example.com/logo.ico", "image/x-icon")}
+        with mock.patch.object(fofatoto, "_MAX_ICON_BYTES", 100):
+            with self.assertRaises(fofatoto.IconExtractError) as cm:
+                self._run("https://example.com/logo.ico", routes)
+            self.assertIn("超过大小上限", str(cm.exception))
+
+
+class IconCacheTest(unittest.TestCase):
+    """resolve_icon_cached 不缓存原始 icon_bytes（PR #2 复核意见）"""
+
+    def test_cache_strips_bytes_and_reuses_entry(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"payload"
+        calls = []
+
+        def fake_urlopen(req, timeout=None, context=None):
+            calls.append(getattr(req, "full_url", req))
+            return FakeHTTPResponse(png, "https://example.com/f.png", "image/png")
+
+        fofatoto._ICON_CACHE.clear()
+        try:
+            with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
+                info = fofatoto.resolve_icon_cached("https://example.com/f.png")
+                again = fofatoto.resolve_icon_cached("https://example.com/f.png")
+        finally:
+            fofatoto._ICON_CACHE.clear()
+        self.assertNotIn("icon_bytes", info)
+        self.assertIn("icon_data_uri", info)
+        self.assertEqual(info["icon_hash"], fofatoto.favicon_hash(png))
+        self.assertEqual(again["icon_hash"], info["icon_hash"])
+        self.assertEqual(len(calls), 1)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@
 - **双入口** — 命令行（CLI）+ 本地 Web UI（即时预览 / 深度导出 / 批量模式），Windows 双击二进制即可打开 Web UI
 - **全量导出** — 突破 FOFA 单次 10000 条限制，`before` 时间游标分批拉取，遇到限流/超时自动放慢节奏
 - **批量查询** — 从文件读取多个目标，支持占位符替换，逐条执行并合并导出
+- **Icon 同款查询** — 输入网站自动抓取 favicon 计算 `icon_hash`，一键查询使用相同图标的同框架/同产品网站，CLI 与 Web UI 均支持
 - **字段定制** — CLI `-f` 指定返回字段；Web UI 字段 chip 支持搜索、增删与拖拽排序
 - **智能去重** — 单字段、多字段组合及 `url` 去重，去重字段自动追加到查询请求
 - **多格式导出** — CSV（UTF-8-BOM）/ JSON / TXT 三种格式
@@ -85,11 +86,12 @@ Web UI 提供三种模式：
 
 主要交互功能：
 
-- **字段选取器**：结果区操作栏「不看」和「选取查询」按钮——点击单元格将字段值排除（本地过滤，红底 chip 可单独移除）或追加为 `字段="值"` 查询条件（可配合自动搜索）
+- **字段选取器**：结果区操作栏「不看」和「选取查询」按钮——点击单元格将字段值排除（本地过滤，红底 chip 可单独移除）或追加为 `字段="值"` 查询条件（可配合自动搜索）；字段 chip 可直接拖入查询输入框，自动插入 `字段=""` 并聚焦（光标在引号内），已有条件时以 `||` 连接
 - **查询历史**：基于浏览器 localStorage，支持内联建议、过滤、点击插入、删除与键盘上下选择；设置弹窗中的「显示历史记录」开关可关闭下拉框（记录照常写入）
 - **设置弹窗**：适应窗口宽度（开 = 表格贴合窗口无横向滚动，关 = 按内容自然列宽可横向滚动）、全部数据（搜索近一年之外的历史数据）、选取查询后自动搜索、显示历史记录
 - **账户信息**：顶栏展示 VIP 状态、剩余查询、过期时间等，每 3 分钟自动刷新（页面隐藏时暂停）
 - **超长查询语句**：输入框聚焦时自动展开换行（浮起不挤动布局），失焦收起为单行，`Enter` 搜索、`Shift+Enter` 换行
+- **Icon 提取**：即时预览设置旁的「Icon 提取」按钮，弹窗输入网站地址后自动提取 favicon 的 icon_hash 并填入查询输入框，回车即查
 
 <img width="2160" height="1247" alt="image" src="https://github.com/user-attachments/assets/59df66e1-e4ea-453d-bde4-a3c826221e45" />
 
@@ -167,6 +169,28 @@ Web UI 提供三种模式：
 ```bash
 ./fofatoto "domain=\$TARGET" -b targets.txt -p '\$TARGET' -o results.csv
 ```
+
+### Icon 同款查询
+
+输入一个网站，自动抓取其 favicon 并计算 `icon_hash`，即可查询 FOFA 中使用相同图标的网站——相同图标基本等于同一产品/框架的默认页面（如 OA、中间件控制台），是快速发现「同款」资产的常用手法：
+
+```bash
+# 查询与 example.com 使用相同图标的网站
+./fofatoto --icon https://example.com
+
+# 叠加过滤条件（位置参数作为附加条件自动 AND）
+./fofatoto --icon https://example.com "port=443" -l 500 -o twins.csv
+
+# 直接给本地 icon 文件或已知 icon_hash 整数
+./fofatoto --icon ./favicon.ico -l max -csv
+./fofatoto --icon -1588080585
+```
+
+- 目标支持三种形态：网站地址（缺省 scheme 自动补 `https://`）、本地 icon 文件、已知 `icon_hash` 整数
+- 提取流程：解析页面 `<link rel=...icon...>`（优先 shortcut icon，支持 data: URI 内嵌图标），找不到回退 `/favicon.ico`；目标直接指向图片时按图片处理
+- `icon_hash` 按 Shodan/FOFA 通用约定计算（base64 编码后的 MurmurHash3 x86_32 有符号 32 位），与 FOFA 网页版 icon 提取结果一致
+- 提取结果与生成的查询语句会打印出来，`-l` / `-f` / `--dedup` / 深度导出等参数照常可用
+- Web UI 中点即时预览设置旁的「Icon 提取」按钮，弹窗输入网址即可自动填入查询输入框；`-i` 与 `-b`、`-w` 互斥
 
 ### 字段定制
 
@@ -255,6 +279,7 @@ TXT 模式根据查询字段自动决定输出内容：
 | `-txt` | 标志 | 否 | 导出 TXT 格式 |
 | `-json` | 标志 | 否 | 导出 JSON 格式 |
 | `--dedup` | 值 | - | 按指定字段去重，逗号分隔 |
+| `-i, --icon` | 值 | - | Icon 同款查询目标：网站地址 / 本地 icon 文件 / icon_hash 整数 |
 | `-b, --batch` | 值 | - | 批量查询目标文件路径 |
 | `-p, --placeholder` | 值 | `{}` | 批量查询占位符格式 |
 | `--fill` | 值 | `0.8` | 深度抓取完成百分比（0.0-1.0，仅 `-l`>10000 或 `max` 时生效） |
@@ -329,7 +354,7 @@ uv run --python 3.12 fofatoto.py "ip=1.1.1.1" -l 5
 +-----------------+
 ```
 
-Web UI 由 `http.server` 提供：仅监听本机（默认 `127.0.0.1`，可用 `--host` 变更），前端为内联 HTML/CSS/JS（无外部资源），通过 `/api/search`、`/api/export`、`/api/batch`、`/api/progress`、`/api/info` 等接口与后端交互，多线程处理请求。
+Web UI 由 `http.server` 提供：仅监听本机（默认 `127.0.0.1`，可用 `--host` 变更），前端为内联 HTML/CSS/JS（无外部资源），通过 `/api/search`、`/api/icon`、`/api/export`、`/api/batch`、`/api/progress`、`/api/info` 等接口与后端交互，多线程处理请求。
 
 ## 构建指南
 
