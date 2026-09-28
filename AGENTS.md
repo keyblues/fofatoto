@@ -11,7 +11,7 @@ Guidance for agents working in this repository.
 ## Commands
 
 ```bash
-# Syntax check + unit tests (stdlib unittest, 106 tests, no network calls)
+# Syntax check + unit tests (stdlib unittest, 124 tests, no network calls)
 python -m py_compile fofatoto.py
 python -m unittest test_fofatoto -v
 
@@ -33,7 +33,7 @@ Tests live in `test_fofatoto.py` (repo root, stdlib `unittest` only — the zero
 
 ## Architecture
 
-Everything lives in `fofatoto.py` (~3440 lines) plus `test_fofatoto.py`. No package structure — designed as a self-contained Nuitka-compilable script.
+Everything lives in `fofatoto.py` (~3470 lines) plus `test_fofatoto.py`. No package structure — designed as a self-contained Nuitka-compilable script.
 
 **Data flow:** `config.json` → `ConfigManager` → `FofaClient` → `FofaResult` dataclass → `Exporter` (CSV/JSON/TXT)
 
@@ -42,24 +42,24 @@ Everything lives in `fofatoto.py` (~3440 lines) plus `test_fofatoto.py`. No pack
 | Component | Lines | Notes |
 |-----------|-------|-------|
 | `APP_VERSION`, `DEFAULT_CONFIG`, `DEFAULT_FIELDS` | 37–52 | Module-level constants |
-| `WEB_FIELD_CATEGORIES`, `WEB_HTML_TEMPLATE` | 96–538 | **The entire Web UI is an inline HTML/CSS/JS string** with `__APP_VERSION__`, `__GITHUB_URL__`, `__FIELD_CATEGORIES_JSON__`, `__DEFAULT_FIELDS_JSON__` placeholders substituted by `render_web_html()` (540); field-selector categories live in `WEB_FIELD_CATEGORIES` and are injected into the template |
-| `ConfigManager` | 558–664 | `get_client()` (643) supports **hot-reload** — re-reads `config.json` each request, caches `FofaClient` by `(url, key, info_api)` signature; no restart needed |
-| `FofaResult` dataclass | 666–716 | 28 FOFA fields; `_extra` dict captures unknown API fields |
-| `ALL_FIELD_NAMES` / `KNOWN_FIELDS` / `CUSTOM_FIELDS` | 718–743 | **Single source of truth for the field list**, derived from `FofaResult`; `_validate_web_field_categories()` runs at import and fails fast if web categories drift from the field set. To add a FOFA field: extend `FofaResult` + categorize in `WEB_FIELD_CATEGORIES` (both in this file) |
-| Icon 提取与 icon_hash | 854–1163 | `IconExtractError`, `_murmur3_32` (pure-Python MurmurHash3 x86_32 — keep zero-dependency), `favicon_hash` (Shodan/FOFA convention: mmh3 of newline-wrapped base64), `build_icon_query`, `_IconLinkParser`, `resolve_icon` (1085, targets: URL / local file / raw hash), `resolve_icon_cached` (1151, backs Web `/api/icon`, file input disabled) |
-| `FofaClient` | 1166–1577 | `search()` (1217) for ≤10000 single-request; `search_all_efficient()` (1312) for deep export via `before` time-cursor; both take `cancel_check` so Web UI cancel interrupts rate-limit/retry sleeps (`_sleep_interruptible`) |
-| `build_url`, `dedup_results` | 1580, 1627 | URL assembly from host/port/protocol; dedup by field tuple, including `_extra` custom fields |
-| `Exporter` | 1662–1779 | `export_csv`/`export_json`/`export_txt`; field filtering, `_extra` handling; default columns = `ALL_FIELD_NAMES` |
-| Export task system | 2206–2520 | `ExportTask` + `_export_tasks` dict; background TTL cleanup thread (60s interval, TTL anchored to `finished_at`); terminal transitions go through `_finish_export_task`; task threads spawn via `_start_export_thread`, which finishes the task as error if `thread.start()` fails (no ghost running tasks); `_has_running_export_task()` (caller must hold `_export_lock`) is checked and the task registered in one critical section in `/api/export` & `/api/batch`; cancel flips `cancelled`/`discard` and raises `KeyboardInterrupt`; web export files go through `_write_web_exports` |
-| `FofaWebHandler` | 2522–3079 | `http.server.BaseHTTPRequestHandler`; routes `/api/search`, `/api/icon`, `/api/export`, `/api/batch`, `/api/progress`, `/api/info`; threads via `ThreadingHTTPServer`; access log includes client source IP; batch accepts per-target `max_size` |
-| `FofaWebServer` | 3142–3208 | Binds `--host` address (default `127.0.0.1`), auto-probes port from 17380; explicit `--host` disables browser auto-open. Helpers above it: `_find_available_port` (3081), `_open_browser` (3100, WSL/SSH/headless handling), `_lan_ips` (3129) |
-| `main()` | 3210 | argparse; web mode when `--web` or no query + no batch file + no `--icon` |
+| `WEB_FIELD_CATEGORIES`, `WEB_HTML_TEMPLATE` | 99–540 | **The entire Web UI is an inline HTML/CSS/JS string** with `__APP_VERSION__`, `__GITHUB_URL__`, `__FIELD_CATEGORIES_JSON__`, `__DEFAULT_FIELDS_JSON__` placeholders substituted by `render_web_html()` (543); field-selector categories live in `WEB_FIELD_CATEGORIES` and are injected into the template |
+| `ConfigManager` | 561–663 | `get_client()` (646) supports **hot-reload** — re-reads `config.json` each request, caches `FofaClient` by `(url, key, info_api)` signature; no restart needed |
+| `FofaResult` dataclass | 669–714 | 28 FOFA fields; `_extra` dict captures unknown API fields |
+| `ALL_FIELD_NAMES` / `KNOWN_FIELDS` / `CUSTOM_FIELDS` | 721–744 | **Single source of truth for the field list**, derived from `FofaResult`; `_validate_web_field_categories()` runs at import and fails fast if web categories drift from the field set. To add a FOFA field: extend `FofaResult` + categorize in `WEB_FIELD_CATEGORIES` (both in this file) |
+| Icon 提取与 icon_hash | 861–1191 | `IconExtractError`, `_murmur3_32` (pure-Python MurmurHash3 x86_32 — keep zero-dependency), `favicon_hash` (Shodan/FOFA convention: mmh3 of newline-wrapped base64), `build_icon_query`, `_IconLinkParser`, `resolve_icon` (1109, targets: URL / local file / raw hash), `resolve_icon_cached` (1177, backs Web `/api/icon`, file input disabled) |
+| `FofaClient` | 1194–1603 | `search()` (1245) for ≤10000 single-request; `search_all_efficient()` (1340) for deep export via `before` time-cursor; both take `cancel_check` so Web UI cancel interrupts rate-limit/retry sleeps (`_sleep_interruptible`) |
+| `build_url`, `dedup_results` | 1608, 1655 | URL assembly from host/port/protocol; dedup by field tuple, including `_extra` custom fields |
+| `Exporter` | 1690–1807 | `export_csv`/`export_json`/`export_txt`; field filtering, `_extra` handling; default columns = `ALL_FIELD_NAMES` |
+| Export task system | 2234–2548 | `ExportTask` + `_export_tasks` dict; background TTL cleanup thread (60s interval, TTL anchored to `finished_at`); terminal transitions go through `_finish_export_task` (2306); task threads spawn via `_start_export_thread` (2321), which finishes the task as error if `thread.start()` fails (no ghost running tasks); `_has_running_export_task()` (2291, caller must hold `_export_lock`) is checked and the task registered in one critical section in `/api/export` & `/api/batch`; cancel flips `cancelled`/`discard` and raises `KeyboardInterrupt`; web export files go through `_write_web_exports` (2536) |
+| `FofaWebHandler` | 2550–3106 | `http.server.BaseHTTPRequestHandler`; routes `/api/search`, `/api/icon` (`_handle_icon`), `/api/export`, `/api/batch`, `/api/progress`, `/api/info`; threads via `ThreadingHTTPServer`; access log includes client source IP; batch accepts per-target `max_size` |
+| `FofaWebServer` | 3169–3231 | Binds `--host` address (default `127.0.0.1`), auto-probes port from 17380; explicit `--host` disables browser auto-open. Helpers above it: `_find_available_port` (3108), `_open_browser` (3127, WSL/SSH/headless handling), `_lan_ips` (3156) |
+| `main()` | 3237 | argparse; web mode when `--web` or no query + no batch file + no `--icon` |
 
 **Time-cursor strategy (`search_all_efficient`):** probe with `size=1` → loop querying `before="<lastupdatetime>"` in 10000-result windows → dedup by host → stop when batch <10000 or fill_percent reached.
 
 ## Editing the Web UI
 
-The Web UI HTML/CSS/JS is a single raw string literal (`WEB_HTML_TEMPLATE`, lines 112–538). This has important consequences:
+The Web UI HTML/CSS/JS is a single raw string literal (`WEB_HTML_TEMPLATE`, lines 112–540). This has important consequences:
 
 - **No syntax highlighting or editor support** — validate JS by running `py_compile` then testing in browser.
 - **No external assets** — all CSS and JS inline, zero dependencies, Chinese UI.
@@ -76,7 +76,7 @@ The Web UI HTML/CSS/JS is a single raw string literal (`WEB_HTML_TEMPLATE`, line
 
 ## Version sync
 
-`APP_VERSION` (fofatoto.py:33) is the source of truth and always reflects the last **released** version. Unreleased changes go under a `## Unreleased` heading in `CHANGELOG.md` — never invent a version number for unpublished work. Only at release time: pick the version, rename the heading to `## vX.Y.Z - YYYY-MM-DD`, and update all three together:
+`APP_VERSION` (fofatoto.py:37) is the source of truth and always reflects the last **released** version. Unreleased changes go under a `## Unreleased` heading in `CHANGELOG.md` — never invent a version number for unpublished work. Only at release time: pick the version, rename the heading to `## vX.Y.Z - YYYY-MM-DD`, and update all three together:
 - `APP_VERSION` in fofatoto.py
 - `pyproject.toml` `version` field
 - `uv.lock` package version
