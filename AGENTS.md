@@ -81,7 +81,7 @@ The Web UI HTML/CSS/JS is a single raw string literal (`WEB_HTML_TEMPLATE`, line
 - `pyproject.toml` `version` field
 - `uv.lock` package version
 
-Currently all three are synced at `1.6.0` (last release: v1.6.0, 2026-09-19).
+Currently all three are synced at `1.7.0` (last release: v1.7.0, 2026-09-28).
 
 ## Branch and changelog rules
 
