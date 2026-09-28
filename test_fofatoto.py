@@ -13,6 +13,7 @@ import json
 import os
 import re
 import socket
+import sys
 import tempfile
 import time
 import unittest
@@ -796,11 +797,24 @@ class DataUriAndSniffTest(unittest.TestCase):
         self.assertEqual(fofatoto._decode_data_uri("data:image/svg+xml,%3Csvg%3E"), b"<svg>")
 
     def test_decode_data_uri_invalid(self):
-        # 非字母表字符被 b64decode 忽略成空字节（调用方按空值跳过）；截断输入抛异常转 None
-        self.assertFalse(fofatoto._decode_data_uri("data:image/png;base64,!!!"))
-        self.assertIsNone(fofatoto._decode_data_uri("data:image/png;base64,Y"))
-        self.assertIsNone(fofatoto._decode_data_uri("data:image/png;base64"))
+        # 严格校验：非法字符/截断/缺逗号/空内容/合法字串夹带非法字符显式报错，不再解出垃圾字节冒充成功
+        for bad in (
+            "data:image/png;base64,!!!",
+            # 旧实现（未开 validate）会剥掉 !!! 后解出 b"hello" 冒充成功，此用例检测其回退
+            "data:image/png;base64,!!!aGVsbG8=",
+            "data:image/png;base64,Y",
+            "data:image/png;base64",
+            "data:image/png,",
+        ):
+            with self.assertRaises(fofatoto.IconExtractError):
+                fofatoto._decode_data_uri(bad)
         self.assertIsNone(fofatoto._decode_data_uri("/relative.png"))
+
+    def test_decode_data_uri_whitespace_tolerated(self):
+        # 换行/空白先剥离再严格校验，合法 base64 不受影响
+        b64 = base64.b64encode(b"icon-data").decode()
+        wrapped = "\n".join(b64[i : i + 4] for i in range(0, len(b64), 4))
+        self.assertEqual(fofatoto._decode_data_uri("data:image/png;base64," + wrapped), b"icon-data")
 
     def test_content_type_and_sniffing(self):
         self.assertEqual(fofatoto._guess_content_type(b"\x89PNG\r\n"), "image/png")
@@ -814,6 +828,8 @@ class DataUriAndSniffTest(unittest.TestCase):
         self.assertTrue(fofatoto._looks_like_icon(b"<svg/>", ""))
         self.assertFalse(fofatoto._looks_like_icon(b"<!DOCTYPE html>rest", "text/html"))
         self.assertFalse(fofatoto._looks_like_icon(b"", ""))
+        # 空响应体即使声明 image/* 也不是图标，避免产出空字节哈希
+        self.assertFalse(fofatoto._looks_like_icon(b"", "image/png"))
 
 
 class ResolveIconTest(unittest.TestCase):
@@ -855,6 +871,33 @@ class ResolveIconTest(unittest.TestCase):
             self.assertEqual(info["source"], "file")
             self.assertEqual(info["icon_hash"], fofatoto.favicon_hash(self.ICO))
             self.assertEqual(info["icon_size"], len(self.ICO))
+        finally:
+            os.unlink(path)
+
+    def test_local_file_read_oserror_wrapped_as_extract_error(self):
+        # 文件占用/权限等 OSError 包装成 IconExtractError，调用方只需捕获这一种类型
+        with tempfile.NamedTemporaryFile(suffix=".ico", delete=False) as fh:
+            fh.write(self.ICO)
+            path = fh.name
+        try:
+            with mock.patch.object(
+                fofatoto.Path, "read_bytes", side_effect=PermissionError(13, "file locked")
+            ):
+                with self.assertRaises(fofatoto.IconExtractError) as cm:
+                    self._run(path, {})
+            self.assertIn("无法读取 icon 文件", str(cm.exception))
+            self.assertIn("file locked", str(cm.exception))
+        finally:
+            os.unlink(path)
+
+    def test_empty_local_file_rejected(self):
+        # 零字节文件不产出空字节哈希（icon_hash="0"），与空响应体同规则
+        with tempfile.NamedTemporaryFile(suffix=".ico", delete=False) as fh:
+            path = fh.name
+        try:
+            with self.assertRaises(fofatoto.IconExtractError) as cm:
+                self._run(path, {})
+            self.assertIn("icon 文件为空", str(cm.exception))
         finally:
             os.unlink(path)
 
@@ -983,6 +1026,91 @@ class ResolveIconTest(unittest.TestCase):
                 self._run("https://example.com/logo.ico", routes)
             self.assertIn("超过大小上限", str(cm.exception))
 
+    def test_dead_link_falls_back_to_favicon_ico(self):
+        calls = []
+        routes = {
+            "https://example.com": FakeHTTPResponse(
+                b'<html><link rel="icon" href="/dead.png"></html>',
+                "https://example.com/", "text/html",
+            ),
+            "https://example.com/dead.png": urllib.error.HTTPError(
+                "https://example.com/dead.png", 404, "Not Found", None, None
+            ),
+            "https://example.com/favicon.ico": FakeHTTPResponse(
+                self.ICO, "https://example.com/favicon.ico", "image/x-icon"
+            ),
+        }
+        info = self._run("https://example.com", routes, calls=calls)
+        self.assertIn("https://example.com/dead.png", calls)
+        self.assertTrue(info["icon_url"].endswith("/favicon.ico"))
+        self.assertEqual(info["icon_hash"], fofatoto.favicon_hash(self.ICO))
+
+    def test_corrupted_data_uri_link_does_not_mint_garbage_hash(self):
+        # 严格 base64 校验：损坏的 data URI 候选按失败走回退，而不是解出垃圾字节当成功。
+        # 载荷取 "@@" + 合法 base64 + "@@"：未开 validate 的旧实现会剥掉 @ 后解出
+        # junk 字节冒充成功（icon_url 为 "(data: URI)"），严格校验则报错走回退——
+        # 端到端据此检测 validate=True 是否被回退。
+        junk_b64 = base64.b64encode(b"junk-data").decode("ascii")
+        routes = {
+            "https://example.com": FakeHTTPResponse(
+                b'<html><link rel="icon" href="data:image/png;base64,@@'
+                + junk_b64.encode("ascii")
+                + b'@@"></html>',
+                "https://example.com/", "text/html",
+            ),
+            "https://example.com/favicon.ico": FakeHTTPResponse(
+                self.ICO, "https://example.com/favicon.ico", "image/x-icon"
+            ),
+        }
+        info = self._run("https://example.com", routes)
+        self.assertTrue(info["icon_url"].endswith("/favicon.ico"))
+        self.assertEqual(info["icon_hash"], fofatoto.favicon_hash(self.ICO))
+
+    def test_html_parse_error_surfaced_in_final_error(self):
+        class BoomParser(fofatoto._IconLinkParser):
+            def feed(self, data):
+                raise ValueError("boom")
+
+        routes = {
+            "https://example.com": FakeHTTPResponse(b"<html>x</html>", "https://example.com/", "text/html"),
+            "https://example.com/favicon.ico": urllib.error.HTTPError(
+                "https://example.com/favicon.ico", 404, "Not Found", None, None
+            ),
+        }
+        with mock.patch.object(fofatoto, "_IconLinkParser", BoomParser):
+            with self.assertRaises(fofatoto.IconExtractError) as cm:
+                self._run("https://example.com", routes)
+        msg = str(cm.exception)
+        self.assertIn("HTML 解析失败", msg)
+        self.assertIn("boom", msg)
+
+    def test_empty_icon_response_rejected(self):
+        # /favicon.ico 返回 200 空体时按失败处理，不产出空字节哈希
+        routes = {
+            "https://example.com": FakeHTTPResponse(b"<html>no icon</html>", "https://example.com/", "text/html"),
+            "https://example.com/favicon.ico": FakeHTTPResponse(b"", "https://example.com/favicon.ico", "image/x-icon"),
+        }
+        with self.assertRaises(fofatoto.IconExtractError) as cm:
+            self._run("https://example.com", routes)
+        self.assertIn("页面未找到可用图标", str(cm.exception))
+        self.assertIn("图标响应为空", str(cm.exception))
+
+    def test_timeout_error_classified(self):
+        routes = {"https://slow.example": socket.timeout("timed out")}
+        with self.assertRaises(fofatoto.IconExtractError) as cm:
+            self._run("slow.example", routes)
+        self.assertIn("连接超时", str(cm.exception))
+
+    def test_http_status_error_classified(self):
+        routes = {
+            "https://example.com": urllib.error.HTTPError(
+                "https://example.com", 503, "Service Unavailable", None, None
+            )
+        }
+        with self.assertRaises(fofatoto.IconExtractError) as cm:
+            self._run("example.com", routes)
+        self.assertIn("HTTP 503", str(cm.exception))
+
 
 class IconCacheTest(unittest.TestCase):
     """resolve_icon_cached 不缓存原始 icon_bytes（PR #2 复核意见）"""
@@ -1003,10 +1131,152 @@ class IconCacheTest(unittest.TestCase):
         finally:
             fofatoto._ICON_CACHE.clear()
         self.assertNotIn("icon_bytes", info)
-        self.assertIn("icon_data_uri", info)
+        self.assertNotIn("icon_data_uri", info)  # 预览字段无人消费，已移除
         self.assertEqual(info["icon_hash"], fofatoto.favicon_hash(png))
         self.assertEqual(again["icon_hash"], info["icon_hash"])
         self.assertEqual(len(calls), 1)
+
+    def test_cache_evicts_oldest_at_max(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"payload"
+
+        def fake_urlopen(req, timeout=None, context=None):
+            return FakeHTTPResponse(png, "https://x.test/f.png", "image/png")
+
+        fofatoto._ICON_CACHE.clear()
+        try:
+            with mock.patch.object(urllib.request, "urlopen", fake_urlopen), mock.patch.object(
+                fofatoto, "_ICON_CACHE_MAX", 2
+            ):
+                for target in ("https://a.test", "https://b.test", "https://c.test"):
+                    fofatoto.resolve_icon_cached(target)
+                self.assertEqual(list(fofatoto._ICON_CACHE.keys()), ["https://b.test", "https://c.test"])
+        finally:
+            fofatoto._ICON_CACHE.clear()
+
+    def test_failed_resolution_not_cached(self):
+        # 瞬时失败不进缓存：下一条请求应重试而不是永久命中错误
+        png = b"\x89PNG\r\n\x1a\n" + b"payload"
+        state = {"fail": True}
+
+        def fake_urlopen(req, timeout=None, context=None):
+            if state["fail"]:
+                raise urllib.error.URLError("transient outage")
+            return FakeHTTPResponse(png, "https://y.test/f.png", "image/png")
+
+        fofatoto._ICON_CACHE.clear()
+        try:
+            with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
+                with self.assertRaises(fofatoto.IconExtractError):
+                    fofatoto.resolve_icon_cached("y.test")
+                state["fail"] = False
+                info = fofatoto.resolve_icon_cached("y.test")
+                self.assertEqual(info["icon_hash"], fofatoto.favicon_hash(png))
+                self.assertEqual(list(fofatoto._ICON_CACHE.keys()), ["y.test"])
+        finally:
+            fofatoto._ICON_CACHE.clear()
+
+
+class ApiIconEndpointTest(unittest.TestCase):
+    """_handle_icon 端点契约（__new__ + mock 响应通道，不起真实服务）"""
+
+    @staticmethod
+    def _handler(body):
+        handler = fofatoto.FofaWebHandler.__new__(fofatoto.FofaWebHandler)
+        sent = {}
+        handler._read_body = mock.Mock(return_value=body)
+        handler._send_json = mock.Mock(
+            side_effect=lambda data, status=200: sent.update(json=data, status=status)
+        )
+        handler._send_error = mock.Mock(
+            side_effect=lambda error, status=200, data=None: sent.update(error=error, status=status)
+        )
+        return handler, sent
+
+    def test_missing_target_rejected(self):
+        handler, sent = self._handler({})
+        handler._handle_icon()
+        handler._send_json.assert_not_called()
+        self.assertEqual(sent["error"], "Target is required")
+
+    def test_success_payload_contract(self):
+        # 前端只读 data.icon_hash，字段缺失会被填成 icon_hash="undefined"，端点必须保证存在
+        handler, sent = self._handler({"target": "https://example.com"})
+        info = {
+            "icon_hash": "-123",
+            "icon_md5": "ab",
+            "icon_url": "https://example.com/f.png",
+            "icon_size": 5,
+            "source": "url",
+        }
+        with mock.patch.object(fofatoto, "resolve_icon_cached", return_value=info):
+            handler._handle_icon()
+        handler._send_error.assert_not_called()
+        self.assertTrue(sent["json"]["success"])
+        for key in ("icon_hash", "icon_md5", "icon_url", "icon_size", "source"):
+            self.assertIn(key, sent["json"]["data"])
+        self.assertEqual(sent["json"]["data"]["icon_hash"], "-123")
+        # 预览字段已随缓存瘦身移除，不得回潜
+        self.assertNotIn("icon_data_uri", sent["json"]["data"])
+
+    def test_extract_error_maps_to_error_response(self):
+        handler, sent = self._handler({"target": "does-not-exist.example"})
+        with mock.patch.object(
+            fofatoto, "resolve_icon_cached", side_effect=fofatoto.IconExtractError("页面未找到可用图标")
+        ):
+            handler._handle_icon()
+        handler._send_json.assert_not_called()
+        self.assertIn("页面未找到可用图标", str(sent["error"]))
+
+    def test_unexpected_exception_still_answers(self):
+        handler, sent = self._handler({"target": "https://example.com"})
+        with mock.patch.object(fofatoto, "resolve_icon_cached", side_effect=RuntimeError("boom")):
+            handler._handle_icon()
+        handler._send_json.assert_not_called()
+        self.assertIn("boom", str(sent["error"]))
+
+    def test_local_file_path_never_resolved_as_file(self):
+        # 端点级不变量：Web 端 allow_file 硬编码 False，本地路径不得被读取后返回
+        with tempfile.NamedTemporaryFile(suffix=".ico", delete=False) as fh:
+            fh.write(b"\x00\x00\x01\x00local-secret")
+            path = fh.name
+        try:
+            handler, sent = self._handler({"target": path})
+
+            def fake_urlopen(req, timeout=None, context=None):
+                raise urllib.error.URLError("network disabled")
+
+            with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
+                handler._handle_icon()
+            handler._send_json.assert_not_called()
+            self.assertIsInstance(sent["error"], fofatoto.IconExtractError)
+        finally:
+            os.unlink(path)
+
+
+class MainIconModeTest(unittest.TestCase):
+    """--icon 与 -w/-b 互斥、以及 --icon 不落入 Web 模式（main 3237-3243 的守卫）"""
+
+    def test_icon_conflicts_with_web_and_batch(self):
+        for extra in (["-w"], ["-b", "targets.txt"]):
+            with mock.patch.object(sys, "argv", ["fofatoto.py", "--icon", "example.com"] + extra):
+                with self.assertRaises(SystemExit) as cm:
+                    fofatoto.main()
+            self.assertEqual(cm.exception.code, 1)
+
+    def test_icon_mode_without_query_runs_icon_not_web(self):
+        # 回归敏感行：web_mode 条件若丢掉 `and not args.icon`，--icon 会静默拉起 Web UI
+        with (
+            mock.patch.object(sys, "argv", ["fofatoto.py", "--icon", "example.com"]),
+            mock.patch.object(fofatoto, "ConfigManager") as cm_cls,
+            mock.patch.object(fofatoto, "print_account_status"),
+            mock.patch.object(fofatoto, "handle_icon_mode") as him,
+            mock.patch.object(fofatoto, "FofaWebServer") as server,
+        ):
+            cm_cls.return_value.ensure_exists.return_value = True
+            cm_cls.return_value.is_valid.return_value = True
+            fofatoto.main()
+        him.assert_called_once()
+        server.assert_not_called()
 
 
 if __name__ == "__main__":

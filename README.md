@@ -186,7 +186,7 @@ Web UI 提供三种模式：
 ./fofatoto --icon -1588080585
 ```
 
-- 目标支持三种形态：网站地址（缺省 scheme 自动补 `https://`）、本地 icon 文件、已知 `icon_hash` 整数
+- 目标支持三种形态：网站地址（缺省 scheme 自动补全，先 `https://` 失败回退 `http://`）、本地 icon 文件、已知 `icon_hash` 整数
 - 提取流程：解析页面 `<link rel=...icon...>`（优先 shortcut icon，支持 data: URI 内嵌图标），找不到回退 `/favicon.ico`；目标直接指向图片时按图片处理
 - `icon_hash` 按 Shodan/FOFA 通用约定计算（base64 编码后的 MurmurHash3 x86_32 有符号 32 位），与 FOFA 网页版 icon 提取结果一致
 - 提取结果与生成的查询语句会打印出来，`-l` / `-f` / `--dedup` / 深度导出等参数照常可用

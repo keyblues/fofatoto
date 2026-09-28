@@ -461,7 +461,7 @@ function executeSearch(){var q=document.getElementById("queryInput").value.trim(
 function openIconModal(){var ov=document.getElementById("iconOverlay"),inp=document.getElementById("iconTargetInput");document.getElementById("iconModalError").style.display="none";inp.value="";inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();submitIconExtract()}else if(e.key==="Escape"){closeIconModal()}};ov.classList.add("show");setTimeout(function(){inp.focus()},50)}
 function closeIconModal(){document.getElementById("iconOverlay").classList.remove("show")}
 function iconModalError(msg){var el=document.getElementById("iconModalError");el.textContent=msg;el.style.display="block"}
-function submitIconExtract(){var inp=document.getElementById("iconTargetInput"),target=inp.value.trim();if(!target){iconModalError("请输入网站地址");return}var btn=document.getElementById("iconExtractBtn"),oldText=btn.textContent;btn.disabled=true;btn.textContent="提取中...";fetch("/api/icon",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target:target})}).then(function(r){return r.json()}).then(function(data){if(!data.success){iconModalError(formatApiError(data,"icon 提取失败"));return}var q='icon_hash="'+(data.data||{}).icon_hash+'"';var qin=document.getElementById("queryInput");qin.value=q;autoResizeQueryInput();closeIconModal();qin.focus()}).catch(function(e){iconModalError("网络错误: "+e.message)}).finally(function(){btn.disabled=false;btn.textContent=oldText})}
+function submitIconExtract(){var inp=document.getElementById("iconTargetInput"),target=inp.value.trim();if(!target){iconModalError("请输入网站地址");return}var btn=document.getElementById("iconExtractBtn"),oldText=btn.textContent;btn.disabled=true;btn.textContent="提取中...";fetch("/api/icon",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target:target})}).then(function(r){return r.json()}).then(function(data){if(!data.success){iconModalError(formatApiError(data,"icon 提取失败"));return}var hash=(data.data||{}).icon_hash;if(!hash){iconModalError("服务器返回数据缺少 icon_hash，请重试");return}var q='icon_hash="'+hash+'"';var qin=document.getElementById("queryInput");qin.value=q;autoResizeQueryInput();closeIconModal();qin.focus()}).catch(function(e){iconModalError("网络错误: "+e.message)}).finally(function(){btn.disabled=false;btn.textContent=oldText})}
 function doInstantSearch(query){var size=parseInt(document.getElementById("instantSize").value)||100,fields=getSelectedFields(),full=document.getElementById("instantFull").checked;clearResults();showMessage("info","搜索中...");fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:query,size:size,fields:fields,full:full})}).then(function(r){return r.json()}).then(function(data){clearMessage();if(data.success){currentResults=data.data.results||[];currentColumns=data.data.columns||[];var _sb=getScrollBox();if(_sb)_sb.scrollTop=0;renderResults(data.data)}else showMessage("error",formatApiError(data,"搜索失败"))}).catch(function(e){showMessage("error","网络错误: "+e.message)})}
 function doDeepExport(query){var fill=parseFloat(document.getElementById("exportFill").value),maxSize=parseInt(document.getElementById("exportMaxSize").value)||0,fields=getSelectedFields(),full=document.getElementById("exportFull").checked;if(isNaN(fill))fill=0.8;if(fill<=0||fill>1){showMessage("error","覆盖率必须在 0 到 1 之间");return}if(maxSize<0){showMessage("error","上限不能小于 0");return}if(exportPollTimer){showMessage("error","已有导出任务正在运行，请先取消或等待完成");return}progressUiMode="panel";exportTaskId=null;clearMessage();showExportPanelStart(query,fill,maxSize,full);setSearchBusy(true,"导出中...");fetch("/api/export",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:query,fill_percent:fill,max_size:maxSize,fields:fields,full:full})}).then(function(r){return r.json()}).then(function(data){if(data.success){exportTaskId=data.task_id;pollProgress()}else{setSearchBusy(false);showExportPanelError(formatApiError(data,"导出失败"))}}).catch(function(e){setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})}
 function doBatchSearch(baseQuery){var ph=document.getElementById("batchPlaceholder").value||"{}",targets=document.getElementById("batchTargets").value.trim(),fill=parseFloat(document.getElementById("batchFill").value)||0.8,maxSize=parseInt(document.getElementById("batchMaxSize").value)||0,fields=getSelectedFields();if(!targets){showMessage("error","请输入批量目标");return}if(baseQuery.indexOf(ph)===-1){showMessage("error","基础查询必须包含占位符: "+ph);return}if(maxSize<0){showMessage("error","每目标上限不能小于 0");return}if(exportPollTimer){showMessage("error","已有任务正在运行，请先取消或等待完成");return}var targetLines=targets.replace(/\r/g,"").split("\n").filter(function(l){return l.trim()});progressUiMode="panel";exportTaskId=null;clearMessage();showBatchPanelStart(baseQuery,targetLines.length,ph,fill,maxSize);setSearchBusy(true,"批量查询中...");fetch("/api/batch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({base_query:baseQuery,targets:targetLines,placeholder:ph,fill_percent:fill,max_size:maxSize,fields:fields})}).then(function(r){return r.json()}).then(function(data){if(data.success){exportTaskId=data.task_id;pollProgress()}else{setSearchBusy(false);showExportPanelError(formatApiError(data,"批量导出失败"))}}).catch(function(e){setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})}
@@ -870,7 +870,6 @@ _ICON_HASH_RE = re.compile(r"^-?\d+$")
 _FETCH_TIMEOUT = 10
 _MAX_HTML_BYTES = 2 * 1024 * 1024
 _MAX_ICON_BYTES = 5 * 1024 * 1024
-_ICON_PREVIEW_MAX_BYTES = 512 * 1024
 _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -966,17 +965,26 @@ class _IconLinkParser(HTMLParser):
 
 
 def _decode_data_uri(href: str) -> Optional[bytes]:
+    """解码 data: URI 图标；非 data: URI 返回 None，格式错误抛 IconExtractError。
+
+    base64 走 validate=True 严格校验：截断或含非法字符时显式报错，而不是把
+    残留合法字符解出的垃圾字节当成功结果去算哈希。
+    """
     if not href.lower().startswith("data:"):
         return None
+    header, sep, payload = href.partition(",")
+    if not sep:
+        raise IconExtractError(f"data URI 缺少逗号分隔: {href[:64]}")
     try:
-        header, sep, payload = href.partition(",")
-        if not sep:
-            return None
         if ";base64" in header.lower():
-            return base64.b64decode(re.sub(r"\s+", "", payload))
-        return unquote_to_bytes(payload)
-    except Exception:
-        return None
+            raw = base64.b64decode(re.sub(r"\s+", "", payload), validate=True)
+        else:
+            raw = unquote_to_bytes(payload)
+    except ValueError as e:
+        raise IconExtractError(f"data URI base64 解码失败: {e}")
+    if not raw:
+        raise IconExtractError("data URI 图标内容为空")
+    return raw
 
 
 def _guess_content_type(data: bytes) -> str:
@@ -995,9 +1003,11 @@ def _guess_content_type(data: bytes) -> str:
 
 
 def _looks_like_icon(data: bytes, ctype: str) -> bool:
+    if not data:
+        return False
     if ctype.startswith("image/"):
         return True
-    if "html" in ctype or not data:
+    if "html" in ctype:
         return False
     if data.startswith((b"\x00\x00\x01\x00", b"\x00\x00\x02\x00")):
         return True
@@ -1017,6 +1027,8 @@ def _fetch_url(url: str, max_bytes: int, accept: str = "*/*") -> tuple[bytes, st
         headers={"User-Agent": _BROWSER_UA, "Accept": accept, "Accept-Language": "zh-CN,zh;q=0.9"},
     )
     ctx = ssl.create_default_context()
+    # 跳过证书校验属已知权衡（PR #2 遗留项）：目标站点证书常无效，响应内容只参与
+    # icon_hash 计算不会被执行；服务默认仅监听 127.0.0.1
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     try:
@@ -1048,7 +1060,7 @@ def _resolve_icon_from_url(url: str) -> tuple[bytes, str, str]:
 
     返回 (icon_bytes, icon 来源 URL, content_type)。
     """
-    # 直接图片目标按图标上限（5MB）抓取；确认为 HTML 后再单独施加 HTML 上限
+    # 直接图片目标按图标上限（5MB）抓取；未识别为图片时再单独施加 HTML 上限（2MB）
     data, final_url, ctype = _fetch_url(
         url, _MAX_ICON_BYTES, accept="text/html,application/xhtml+xml,image/*;q=0.8,*/*;q=0.5"
     )
@@ -1060,11 +1072,13 @@ def _resolve_icon_from_url(url: str) -> tuple[bytes, str, str]:
         )
 
     parser = _IconLinkParser()
+    parse_error: Optional[Exception] = None
     try:
         parser.feed(data.decode("utf-8", errors="replace"))
         parser.close()
-    except Exception:
-        pass
+    except Exception as e:
+        # 解析崩溃不静默吞掉：候选链全部失败时把真实原因并入最终错误，避免误归因
+        parse_error = e
 
     candidates = []
     if parser.icon_href:
@@ -1075,19 +1089,21 @@ def _resolve_icon_from_url(url: str) -> tuple[bytes, str, str]:
     for href in candidates:
         try:
             if href.lower().startswith("data:"):
+                # 格式错误在此抛 IconExtractError 并由下方 except 记入 last_error
                 raw = _decode_data_uri(href)
-                if not raw:
-                    continue
                 return raw, "(data: URI)", _guess_content_type(raw)
             icon_url = urljoin(final_url, href)
             raw, icon_final, icon_ctype = _fetch_url(icon_url, _MAX_ICON_BYTES, accept="image/*,*/*;q=0.8")
+            if not raw:
+                raise IconExtractError(f"图标响应为空: {icon_url}")
             return raw, icon_final, icon_ctype or _guess_content_type(raw)
         except Exception as e:
             last_error = e
             continue
+    note = f"HTML 解析失败（{parse_error}）；" if parse_error else ""
     if last_error:
-        raise IconExtractError(f"页面未找到可用图标（{last_error}）")
-    raise IconExtractError(f"页面未找到可用图标: {url}")
+        raise IconExtractError(f"页面未找到可用图标（{note}{last_error}）")
+    raise IconExtractError(f"{note}页面未找到可用图标: {url}")
 
 
 def resolve_icon(target: str, allow_file: bool = True) -> dict:
@@ -1105,20 +1121,15 @@ def resolve_icon(target: str, allow_file: bool = True) -> dict:
 
     def _result(icon_bytes: bytes, icon_url: str, ctype: str, source: str, icon_hash: str = "") -> dict:
         icon_hash = icon_hash or favicon_hash(icon_bytes)
-        preview = ""
-        if icon_bytes and len(icon_bytes) <= _ICON_PREVIEW_MAX_BYTES:
-            b64 = base64.b64encode(icon_bytes).decode()
-            preview = f"data:{ctype or _guess_content_type(icon_bytes)};base64,{b64}"
         return {
             "target": target,
             "source": source,
             "icon_hash": icon_hash,
-            "icon_md5": hashlib.md5(icon_bytes).hexdigest() if icon_bytes else "",
+            "icon_md5": hashlib.md5(icon_bytes, usedforsecurity=False).hexdigest() if icon_bytes else "",
             "icon_url": icon_url,
             "icon_size": len(icon_bytes),
             "content_type": ctype,
             "icon_bytes": icon_bytes,
-            "icon_data_uri": preview,
         }
 
     if _ICON_HASH_RE.match(target):
@@ -1127,7 +1138,14 @@ def resolve_icon(target: str, allow_file: bool = True) -> dict:
     if allow_file:
         path = Path(target)
         if path.is_file():
-            raw = path.read_bytes()
+            try:
+                raw = path.read_bytes()
+            except OSError as e:
+                # 包装成 IconExtractError，让调用方的 except 只需处理这一种类型
+                raise IconExtractError(f"无法读取 icon 文件 {path}: {e}")
+            if not raw:
+                # 与空响应体同规则：零字节文件不产出空字节哈希（icon_hash="0"）
+                raise IconExtractError(f"icon 文件为空: {path}")
             if len(raw) > _MAX_ICON_BYTES:
                 raise IconExtractError(f"icon 文件超过大小上限 {_MAX_ICON_BYTES // (1024 * 1024)}MB")
             return _result(raw, str(path), _guess_content_type(raw), "file")
@@ -1164,7 +1182,7 @@ def resolve_icon_cached(target: str) -> dict:
     if hit is not None:
         return hit
     info = resolve_icon(key, allow_file=False)
-    # 接口只需要派生字段与预览，缓存剔除原始 icon_bytes，避免长驻内存膨胀
+    # 接口只需要派生字段（icon_hash/icon_md5 等），缓存剔除原始 icon_bytes，避免长驻内存膨胀
     info = {k: v for k, v in info.items() if k != "icon_bytes"}
     with _ICON_CACHE_LOCK:
         while len(_ICON_CACHE) >= _ICON_CACHE_MAX:
@@ -2718,7 +2736,6 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                         "icon_md5": info["icon_md5"],
                         "icon_url": info["icon_url"],
                         "icon_size": info["icon_size"],
-                        "icon_data_uri": info["icon_data_uri"],
                         "source": info["source"],
                     },
                 }
