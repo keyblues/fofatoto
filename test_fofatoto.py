@@ -9,12 +9,14 @@ monkeypatch urlopen 模拟。）
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 import re
 import socket
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
@@ -1258,12 +1260,311 @@ class MainIconModeTest(unittest.TestCase):
             mock.patch.object(fofatoto, "print_account_status"),
             mock.patch.object(fofatoto, "handle_icon_mode") as him,
             mock.patch.object(fofatoto, "FofaWebServer") as server,
+            mock.patch.object(fofatoto, "announce_update"),
         ):
             cm_cls.return_value.ensure_exists.return_value = True
             cm_cls.return_value.is_valid.return_value = True
             fofatoto.main()
         him.assert_called_once()
         server.assert_not_called()
+
+
+class _ReleaseResponse:
+    def __init__(self, body: bytes):
+        self._body = body
+        self._pos = 0
+        self.status = 200
+
+    def read(self, n: int = -1) -> bytes:
+        if n is None or n < 0:
+            n = len(self._body) - self._pos
+        chunk = self._body[self._pos : self._pos + n]
+        self._pos += len(chunk)
+        return chunk
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class UpdateCheckTest(unittest.TestCase):
+    """GitHub Releases 版本检查：比较、缓存、失败静默、Web 载荷。不发真实请求。"""
+
+    def setUp(self):
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.cache_path = Path(self._tmpdir.name) / "update.json"
+        self._cache_patch = mock.patch.object(
+            fofatoto, "_update_cache_file", return_value=self.cache_path
+        )
+        self._cache_patch.start()
+        fofatoto._reset_update_check_state()
+        self.addCleanup(self._cache_patch.stop)
+        self.addCleanup(self._tmpdir.cleanup)
+        self.addCleanup(self._wait_and_reset)
+
+    def _wait_and_reset(self):
+        for _ in range(200):
+            with fofatoto._update_lock:
+                inflight = fofatoto._update_inflight
+            if not inflight:
+                break
+            time.sleep(0.01)
+        fofatoto._reset_update_check_state()
+
+    def test_parse_and_compare_versions(self):
+        self.assertEqual(fofatoto.parse_version("v1.2.3"), (1, 2, 3))
+        self.assertEqual(fofatoto.parse_version("1.2"), (1, 2))
+        self.assertIsNone(fofatoto.parse_version("1.2.3-beta"))
+        self.assertIsNone(fofatoto.parse_version("v1.2.3-rc1"))
+        self.assertIsNone(fofatoto.parse_version(""))
+        self.assertTrue(fofatoto.is_newer_version("1.10.0", "1.9.0"))
+        self.assertTrue(fofatoto.is_newer_version("v1.8.0", "1.7.0"))
+        self.assertFalse(fofatoto.is_newer_version("1.7", "1.7.0"))
+        self.assertFalse(fofatoto.is_newer_version("1.6.9", "1.7.0"))
+        self.assertFalse(fofatoto.is_newer_version("nope", "1.7.0"))
+
+    def test_fetch_parses_release(self):
+        body = json.dumps(
+            {
+                "tag_name": "v9.1.0",
+                "html_url": "https://github.com/keyblues/fofatoto/releases/tag/v9.1.0",
+                "draft": False,
+                "prerelease": False,
+            }
+        ).encode()
+        seen = {}
+
+        def fake(req, timeout=None):
+            seen["url"] = req.full_url
+            seen["timeout"] = timeout
+            seen["ua"] = req.get_header("User-agent")
+            return _ReleaseResponse(body)
+
+        with mock.patch.object(urllib.request, "urlopen", fake):
+            found = fofatoto.fetch_latest_release(2.5)
+        self.assertEqual(
+            found,
+            ("9.1.0", "https://github.com/keyblues/fofatoto/releases/tag/v9.1.0"),
+        )
+        self.assertIn("/repos/keyblues/fofatoto/releases/latest", seen["url"])
+        self.assertEqual(seen["timeout"], 2.5)
+        self.assertIn(f"fofatoto/{fofatoto.APP_VERSION}", seen["ua"])
+
+    def test_fetch_rejects_prerelease_draft_and_bad_payloads(self):
+        def respond(payload):
+            def fake(req, timeout=None):
+                return _ReleaseResponse(json.dumps(payload).encode())
+
+            with mock.patch.object(urllib.request, "urlopen", fake):
+                return fofatoto.fetch_latest_release()
+
+        self.assertIsNone(respond({"tag_name": "v9.0.0", "prerelease": True}))
+        self.assertIsNone(respond({"tag_name": "v9.0.0", "draft": True}))
+        self.assertIsNone(respond({"tag_name": "nightly"}))
+        self.assertIsNone(respond([]))
+
+    def test_fetch_swallows_network_errors_and_oversized_body(self):
+        def boom(req, timeout=None):
+            raise urllib.error.URLError("offline")
+
+        with mock.patch.object(urllib.request, "urlopen", boom):
+            self.assertIsNone(fofatoto.fetch_latest_release())
+
+        huge = b"{" + b"x" * (fofatoto.UPDATE_RESPONSE_LIMIT + 1)
+
+        def oversized(req, timeout=None):
+            return _ReleaseResponse(huge)
+
+        with mock.patch.object(urllib.request, "urlopen", oversized):
+            self.assertIsNone(fofatoto.fetch_latest_release())
+
+    def test_untrusted_release_url_is_replaced(self):
+        body = json.dumps(
+            {
+                "tag_name": "v9.1.0",
+                "html_url": "https://evil.example/phish",
+            }
+        ).encode()
+
+        def fake(req, timeout=None):
+            return _ReleaseResponse(body)
+
+        with mock.patch.object(urllib.request, "urlopen", fake):
+            found = fofatoto.fetch_latest_release()
+        self.assertEqual(
+            found[1], "https://github.com/keyblues/fofatoto/releases/tag/v9.1.0"
+        )
+
+    def test_announce_prints_newer_version_and_uses_cache(self):
+        url = "https://github.com/keyblues/fofatoto/releases/tag/v9.2.0"
+        calls = {"n": 0}
+
+        def fake(timeout=None):
+            calls["n"] += 1
+            return ("9.2.0", url)
+
+        buf = io.StringIO()
+        with mock.patch.object(fofatoto, "fetch_latest_release", fake):
+            with mock.patch("sys.stdout", buf):
+                fofatoto.announce_update(blocking=True)
+                fofatoto.announce_update(blocking=True)
+        text = buf.getvalue()
+        self.assertIn("发现新版本 v9.2.0", text)
+        self.assertIn(f"当前 v{fofatoto.APP_VERSION}", text)
+        self.assertIn(url, text)
+        self.assertEqual(calls["n"], 1)
+        cached = json.loads(self.cache_path.read_text(encoding="utf-8"))
+        self.assertEqual(cached["latest"], "9.2.0")
+        self.assertTrue(cached["ok"])
+
+    def test_current_version_is_silent(self):
+        def fake(timeout=None):
+            return (
+                fofatoto.APP_VERSION,
+                f"https://github.com/keyblues/fofatoto/releases/tag/v{fofatoto.APP_VERSION}",
+            )
+
+        buf = io.StringIO()
+        with mock.patch.object(fofatoto, "fetch_latest_release", fake):
+            with mock.patch("sys.stdout", buf):
+                fofatoto.announce_update(blocking=True)
+        self.assertNotIn("发现新版本", buf.getvalue())
+        snap = fofatoto.snapshot_update()
+        self.assertFalse(snap["update_available"])
+        self.assertFalse(snap["pending"])
+
+    def test_failure_is_cached_until_fail_ttl(self):
+        clock = {"t": 1_700_000_000.0}
+        calls = {"n": 0}
+
+        def now():
+            return clock["t"]
+
+        def fake(timeout=None):
+            calls["n"] += 1
+            return None
+
+        with (
+            mock.patch.object(fofatoto.time, "time", now),
+            mock.patch.object(fofatoto, "fetch_latest_release", fake),
+        ):
+            fofatoto.announce_update(blocking=True)
+            fofatoto.announce_update(blocking=True)
+            self.assertEqual(calls["n"], 1)
+            clock["t"] += fofatoto.UPDATE_FAIL_TTL + 1
+            fofatoto.announce_update(blocking=True)
+            self.assertEqual(calls["n"], 2)
+
+    def test_disk_cache_rewrites_untrusted_url(self):
+        self.cache_path.write_text(
+            json.dumps(
+                {
+                    "checked_at": time.time(),
+                    "ok": True,
+                    "latest": "9.9.0",
+                    "url": "https://evil.example/phish",
+                }
+            ),
+            encoding="utf-8",
+        )
+        with mock.patch.object(fofatoto, "fetch_latest_release") as fetch:
+            snap = fofatoto.snapshot_update()
+        fetch.assert_not_called()
+        self.assertTrue(snap["update_available"])
+        self.assertEqual(snap["latest"], "9.9.0")
+        self.assertEqual(
+            snap["url"], "https://github.com/keyblues/fofatoto/releases/tag/v9.9.0"
+        )
+        self.assertFalse(snap["pending"])
+
+    def test_disabled_by_env_and_flag(self):
+        with mock.patch.object(fofatoto, "fetch_latest_release") as fetch:
+            with mock.patch.dict(os.environ, {"FOFATOTO_NO_UPDATE_CHECK": "1"}):
+                fofatoto.announce_update(blocking=True)
+                snap = fofatoto.snapshot_update()
+            fetch.assert_not_called()
+        self.assertFalse(snap["update_available"])
+        self.assertFalse(snap["pending"])
+
+        fofatoto.suppress_update_check()
+        with mock.patch.object(fofatoto, "fetch_latest_release") as fetch:
+            fofatoto.announce_update(blocking=True)
+            fetch.assert_not_called()
+        self.assertTrue(fofatoto.update_check_disabled())
+        args = fofatoto.build_parser().parse_args(["--no-update-check"])
+        self.assertTrue(args.no_update_check)
+
+    def test_snapshot_pending_then_ready(self):
+        started = threading.Event()
+        release = threading.Event()
+        url = "https://github.com/keyblues/fofatoto/releases/tag/v9.0.0"
+
+        def fake(timeout=None):
+            started.set()
+            self.assertTrue(release.wait(2))
+            return ("9.0.0", url)
+
+        with mock.patch.object(fofatoto, "fetch_latest_release", fake):
+            first = fofatoto.snapshot_update()
+            self.assertTrue(first["pending"])
+            self.assertFalse(first["update_available"])
+            self.assertTrue(started.wait(1))
+            release.set()
+            snap = first
+            deadline = time.time() + 2
+            while time.time() < deadline:
+                snap = fofatoto.snapshot_update()
+                if not snap["pending"]:
+                    break
+                time.sleep(0.01)
+        self.assertFalse(snap["pending"])
+        self.assertTrue(snap["update_available"])
+        self.assertEqual(snap["latest"], "9.0.0")
+        self.assertEqual(snap["url"], url)
+
+    def test_update_endpoint_and_route(self):
+        handler = fofatoto.FofaWebHandler.__new__(fofatoto.FofaWebHandler)
+        sent = {}
+        handler._send_json = lambda data, status=200: sent.update(json=data, status=status)
+        payload = {
+            "current": fofatoto.APP_VERSION,
+            "latest": "9.0.0",
+            "update_available": True,
+            "url": "https://github.com/keyblues/fofatoto/releases/tag/v9.0.0",
+            "pending": False,
+        }
+        with mock.patch.object(fofatoto, "snapshot_update", return_value=payload):
+            handler._handle_update()
+        self.assertTrue(sent["json"]["success"])
+        self.assertEqual(sent["json"]["data"]["latest"], "9.0.0")
+
+        handler.path = "/api/update"
+        handler._handle_update = mock.Mock()
+        handler.do_GET()
+        handler._handle_update.assert_called_once()
+
+    def test_web_template_has_update_badge(self):
+        html = fofatoto.render_web_html()
+        self.assertIn('id="updateBadge"', html)
+        self.assertIn('fetch("/api/update")', html)
+        self.assertIn(f"{fofatoto.GITHUB_URL}/releases/", html)
+        self.assertNotIn("__GITHUB_URL__", html)
+
+    def test_no_update_check_flag_suppresses_before_web(self):
+        with (
+            mock.patch.object(sys, "argv", ["fofatoto.py", "--no-update-check"]),
+            mock.patch.object(fofatoto, "ConfigManager") as cm_cls,
+            mock.patch.object(fofatoto, "FofaWebServer") as server,
+            mock.patch.object(fofatoto, "announce_update") as announce,
+        ):
+            cm_cls.return_value.ensure_exists.return_value = True
+            cm_cls.return_value.is_valid.return_value = False
+            fofatoto.main()
+        self.assertTrue(fofatoto.update_check_disabled())
+        server.return_value.start.assert_called_once()
+        announce.assert_not_called()
 
 
 if __name__ == "__main__":
