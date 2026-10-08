@@ -2,6 +2,11 @@
 
 本文件使用发布记录（Releases）风格维护版本变更。
 
+## Unreleased
+
+### 新增
+- 启动时自动检查 GitHub Releases：有新版本时，命令行在 Banner 后提示下载地址；Web UI 顶栏版本号旁显示「新版本 vx.y.z」并链到发布页。检查在后台或短超时内完成，失败（离线、超时、限流）静默跳过。成功结果缓存 12 小时，失败缓存 1 小时。`--no-update-check` 或环境变量 `FOFATOTO_NO_UPDATE_CHECK=1` 可关闭。
+
 ## v1.7.0 - 2026-09-28
 
 ### 新增
