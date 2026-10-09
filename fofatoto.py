@@ -34,7 +34,7 @@ from urllib.parse import parse_qs, quote, unquote_to_bytes, urljoin, urlparse
 
 # ============ Banner ============
 
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 GITHUB_URL = "https://github.com/keyblues/fofatoto"
 DEFAULT_CONFIG = {"url": "https://fofa.info", "key": "your-fofa-key-here"}
 DEFAULT_WEB_PORT = 17380
