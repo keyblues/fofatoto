@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+### 优化
+- Web 导出面板与批量进度的状态文案改为中文，与单次导出一致：目标进度、重试、部分目标失败，以及取消后面板展示的「已取消」。
+
 ### 其他
 - CI 与文档的 Nuitka 编译命令去掉与 `--noinclude-default-mode=nofollow` 重复的七个 `--noinclude-*-mode`；`check` 任务删除已被单测覆盖的版本号同步 shell 步骤（保留 tag 与版本对照）。
 

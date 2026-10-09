@@ -2403,7 +2403,7 @@ def _create_web_progress_callback(task_id: str):
                 task.fetched = state.get("fetched", 0)
                 task.message = "已达到目标数量，正在整理文件"
             elif event == "interrupted":
-                task.message = "Interrupted"
+                task.message = "部分结果已获取，正在生成导出文件"
             elif event == "done":
                 task.progress = 0.99
                 if state.get("interrupted"):
@@ -2450,8 +2450,8 @@ def _create_web_batch_progress_callback(
                 max_attempts = state.get("max_attempts", 0)
                 rate_limit = state.get("rate_limit", 0)
                 task.message = (
-                    f"Target {batch_idx + 1}/{total_queries}: "
-                    f"retry {attempt}/{max_attempts - 1}, wait {rate_limit:.1f}s"
+                    f"目标 {batch_idx + 1}/{total_queries} 请求失败，正在重试 "
+                    f"{attempt}/{max_attempts - 1}；后续间隔 {rate_limit:.1f}s"
                 )
             elif event == "error_partial":
                 task.current_fetched = state.get("fetched", task.current_fetched)
@@ -2468,7 +2468,8 @@ def _create_web_batch_progress_callback(
             current_ratio = min(task.current_fetched / max(current_target, 1), 1)
             task.progress = min((batch_idx + current_ratio) / max(total_queries, 1), 0.99)
             task.fetched = base_count + task.current_fetched
-            task.message = f"Target {batch_idx + 1}/{total_queries}"
+            if event != "retry":
+                task.message = f"正在查询目标 {batch_idx + 1}/{total_queries}"
 
     return progress_callback
 
@@ -2796,11 +2797,11 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                     discard = task.discard
 
             if discard:
-                _finish_export_task(task_id, "error", error="Cancelled by user")
+                _finish_export_task(task_id, "error", error="已取消")
                 return
 
             if not stats.results and cancelled:
-                _finish_export_task(task_id, "error", error="Cancelled by user")
+                _finish_export_task(task_id, "error", error="已取消")
                 return
 
             output_files = _write_web_exports("fofa_export", stats.results, fields)
@@ -2811,7 +2812,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                 progress=1.0,
                 partial=cancelled or stats.partial,
                 partial_error=(
-                    "Cancelled by user" if cancelled else stats.partial_error
+                    "已取消" if cancelled else stats.partial_error
                 ),
                 message=(
                     "已取消，已保留部分结果"
@@ -2829,7 +2830,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                 output_files=output_files,
             )
         except KeyboardInterrupt:
-            _finish_export_task(task_id, "error", error="Cancelled by user")
+            _finish_export_task(task_id, "error", error="已取消")
         except Exception as e:
             _finish_export_task(task_id, "error", error=self._safe_error(e))
 
@@ -2983,7 +2984,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                         task.current_fetched = 0
                         task.current_total_estimated = 0
                         task.current_target_count = max_size if 0 < max_size <= 10000 else 0
-                        task.message = f"Target {batch_idx + 1}/{total_queries}"
+                        task.message = f"正在查询目标 {batch_idx + 1}/{total_queries}"
 
                 stats = None
                 try:
@@ -3018,7 +3019,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                         task.progress = progress
                         task.fetched = len(all_results)
                         task.current_fetched = len(stats.results) if stats else 0
-                        task.message = f"Target {batch_idx + 1}/{total_queries}"
+                        task.message = f"正在查询目标 {batch_idx + 1}/{total_queries}"
                         task.failed_count = failed_count
 
                 if batch_idx < total_queries - 1:
@@ -3029,7 +3030,9 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
 
             done_fields = {"failed_count": failed_count}
             if failed_count:
-                done_fields["message"] = f"Partial: {failed_count}/{total_queries} failed"
+                done_fields["message"] = (
+                    f"部分导出完成，{failed_count}/{total_queries} 个目标失败"
+                )
             _finish_export_task(
                 task_id,
                 "done",
@@ -3043,7 +3046,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                 task = _export_tasks.get(task_id)
                 discard = bool(task and task.discard)
             if discard:
-                _finish_export_task(task_id, "error", error="Cancelled by user")
+                _finish_export_task(task_id, "error", error="已取消")
                 return
             if all_results:
                 output_files = _write_web_exports("fofa_batch", all_results, fields)
@@ -3052,13 +3055,13 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                     "done",
                     progress=1.0,
                     partial=True,
-                    partial_error="Cancelled by user",
+                    partial_error="已取消",
                     message="已取消，已保留部分结果",
                     fetched=len(all_results),
                     output_files=output_files,
                 )
             else:
-                _finish_export_task(task_id, "error", error="Cancelled by user")
+                _finish_export_task(task_id, "error", error="已取消")
         except Exception as e:
             _finish_export_task(task_id, "error", error=self._safe_error(e))
 
