@@ -2,6 +2,11 @@
 
 本文件使用发布记录（Releases）风格维护版本变更。
 
+## Unreleased
+
+### 其他
+- CI 与文档的 Nuitka 编译命令去掉与 `--noinclude-default-mode=nofollow` 重复的七个 `--noinclude-*-mode`；`check` 任务删除已被单测覆盖的版本号同步 shell 步骤（保留 tag 与版本对照）。
+
 ## v1.7.0 - 2026-09-28
 
 ### 新增

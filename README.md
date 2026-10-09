@@ -372,18 +372,10 @@ apt install python3-dev patchelf
 
 ```bash
 # Linux / macOS
-python3 -m nuitka --onefile \
-  --lto=yes --static-libpython=yes --remove-output --assume-yes-for-downloads \
-  --python-flag=no_site,no_docstrings \
-  --noinclude-pytest-mode=nofollow \
-  --noinclude-setuptools-mode=nofollow \
-  --noinclude-unittest-mode=nofollow \
-  --noinclude-pydoc-mode=nofollow \
-  --output-filename=fofatoto \
-  fofatoto.py
+python3 -m nuitka --onefile --lto=yes --static-libpython=yes --remove-output --assume-yes-for-downloads --python-flag=no_site,no_docstrings --noinclude-default-mode=nofollow --output-dir=dist --output-filename=fofatoto fofatoto.py
 
 # Windows (PowerShell 需要单行命令)
-python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_site,no_docstrings --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow --noinclude-IPython-mode=nofollow --noinclude-dask-mode=nofollow --noinclude-numba-mode=nofollow --noinclude-default-mode=nofollow --output-dir=dist --output-filename=fofatoto.exe fofatoto.py
+python -m nuitka --onefile --lto=yes --remove-output --assume-yes-for-downloads --python-flag=no_site,no_docstrings --noinclude-default-mode=nofollow --output-dir=dist --output-filename=fofatoto.exe fofatoto.py
 ```
 
 项目使用 GitHub Actions 自动构建多平台二进制（push `v*` 标签或手动触发），配置见 `.github/workflows/build.yml`。

@@ -22,14 +22,14 @@ python fofatoto.py "domain=baidu.com" -l 10
 python fofatoto.py -w
 
 # Build binary (requires: pip install nuitka zstandard; Linux also needs patchelf + python3-dev)
+# Linux / macOS. Windows omits --static-libpython=yes. Same flags as CI.
 python -m nuitka --onefile --lto=yes --static-libpython=yes --remove-output \
   --assume-yes-for-downloads --python-flag=no_site,no_docstrings \
-  --noinclude-pytest-mode=nofollow --noinclude-setuptools-mode=nofollow \
-  --noinclude-unittest-mode=nofollow --noinclude-pydoc-mode=nofollow \
-  --output-filename=fofatoto fofatoto.py
+  --noinclude-default-mode=nofollow \
+  --output-dir=dist --output-filename=fofatoto fofatoto.py
 ```
 
-Tests live in `test_fofatoto.py` (repo root, stdlib `unittest` only — the zero-dependency rule applies to tests too; FOFA API calls are mocked via `urllib.request.urlopen` patching, never hit the network). There is no linter or formatter config. CI runs `py_compile` + tests + a three-way version-sync check before every build.
+Tests live in `test_fofatoto.py` (repo root, stdlib `unittest` only — the zero-dependency rule applies to tests too; FOFA API calls are mocked via `urllib.request.urlopen` patching, never hit the network). There is no linter or formatter config. CI runs `py_compile` + tests before every build.
 
 ## Architecture
 
@@ -92,7 +92,7 @@ Currently all three are synced at `1.7.0` (last release: v1.7.0, 2026-09-28).
 ## CI/CD
 
 `.github/workflows/build.yml` triggers on tag push (`v*`) or manual dispatch:
-- `check` job runs first: `py_compile` + `test_fofatoto` unittest suite + version-sync check (`APP_VERSION` = `pyproject.toml` = `uv.lock`); on tag pushes it also verifies the tag matches `v$APP_VERSION`. All build jobs `needs: check`.
+- `check` job runs first: `py_compile` + `test_fofatoto` unittest suite (asserts `APP_VERSION` = `pyproject.toml` = `uv.lock`); on tag pushes it also verifies the tag matches `v$APP_VERSION`. All build jobs `needs: check`.
 - Windows amd64; Linux amd64 (`ubuntu-latest`) and arm64 (`ubuntu-24.04-arm`), both inside a Debian bookworm container so the image follows the runner architecture; macOS arm64 only (Apple Silicon / M 系列, `macos-latest`, job asserts `platform.machine()=="arm64"`)
 - All built via Nuitka `--onefile --lto=yes`
 - Release job runs only on tag push (`v*`), not on manual dispatch — dispatch still builds and uploads artifacts, but does not create a tag. Artifact names: `fofatoto.exe`, `fofatoto`, `fofatoto_arm64`, `fofatoto_mac_arm64`
