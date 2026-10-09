@@ -84,6 +84,7 @@ GREEN = "\033[92m" if COLOR_ENABLED else ""
 YELLOW = "\033[93m" if COLOR_ENABLED else ""
 RED = "\033[91m" if COLOR_ENABLED else ""
 CYAN = "\033[96m" if COLOR_ENABLED else ""
+GRAY = "\033[90m" if COLOR_ENABLED else ""
 BOLD = "\033[1m" if COLOR_ENABLED else ""
 RESET = "\033[0m" if COLOR_ENABLED else ""
 
@@ -2848,15 +2849,165 @@ def _write_web_exports(prefix: str, results: list, fields: str) -> dict:
     return output_files
 
 
+# 成功的轮询与浏览器探测不进 CLI。页面本身在短时间内的重复打开也合并成一行。
+_WEB_QUIET_PATHS = frozenset({"/api/progress"})
+_WEB_LOG_METHOD_WIDTH = 6
+_WEB_LOG_PATH_WIDTH = 24
+_WEB_HOME_BURST_SEC = 30.0
+_web_log_lock = threading.Lock()
+_web_home_seen: dict[tuple[str, int], float] = {}
+
+
+def _http_status_code(code) -> Optional[int]:
+    if isinstance(code, http.HTTPStatus):
+        return int(code)
+    try:
+        return int(code)
+    except (TypeError, ValueError):
+        return None
+
+
+def _control_char_table():
+    table = getattr(http.server.BaseHTTPRequestHandler, "_control_char_table", None)
+    if table is not None:
+        return table
+    return str.maketrans({c: rf"\x{c:02x}" for c in range(32) if c not in (9, 10, 13)} | {127: r"\x7f"})
+
+
+def _sanitize_web_log(text: str) -> str:
+    return text.translate(_control_char_table())
+
+
+def _web_peer_label(address) -> str:
+    """访问日志保留来源地址，本机回环也打印。"""
+    if not address:
+        return ""
+    host = address[0] if isinstance(address, tuple) else str(address)
+    return _sanitize_web_log(host)
+
+
+def _web_log_target(path: str) -> str:
+    """访问日志只保留路径；下载请求附带 format，不回显 task_id 等查询串。"""
+    parsed = urlparse(path or "/")
+    clean = (parsed.path or "/").rstrip("/") or "/"
+    if clean == "/api/export/download":
+        fmt = parse_qs(parsed.query).get("format", [""])[0]
+        if isinstance(fmt, str) and re.fullmatch(r"[A-Za-z0-9]+", fmt):
+            return f"{clean}?format={fmt}"
+    return clean
+
+
+def _browser_probe(path: str) -> bool:
+    """浏览器和调试器自己发的探测，不是用户操作。"""
+    if path in ("/favicon.ico", "/robots.txt") or path.startswith("/apple-touch-icon"):
+        return True
+    # Chrome / Edge / IDE 会把本机端口当成 DevTools，反复请求这些路径。
+    if path == "/json" or path.startswith("/json/") or path.startswith("/devtools/"):
+        return True
+    return path.startswith("/.well-known/")
+
+
+def _web_access_quiet(path: str, status: Optional[int]) -> bool:
+    if status is not None and status >= 500:
+        return False
+    if _browser_probe(path):
+        return True
+    return status is not None and status < 400 and path in _WEB_QUIET_PATHS
+
+
+def _homepage_burst(method: str, target: str, status: Optional[int], peer: str) -> bool:
+    """同一来源短时间反复打开页面时只保留第一行。"""
+    if method.upper() != "GET" or target != "/" or status is None or status >= 400:
+        return False
+    now = time.monotonic()
+    key = (peer, status)
+    with _web_log_lock:
+        last = _web_home_seen.get(key)
+        _web_home_seen[key] = now
+        if len(_web_home_seen) > 64:
+            cutoff = now - _WEB_HOME_BURST_SEC
+            for stale in [item for item, seen in _web_home_seen.items() if seen < cutoff]:
+                _web_home_seen.pop(stale, None)
+        return last is not None and (now - last) < _WEB_HOME_BURST_SEC
+
+
+def _status_color(status: Optional[int]) -> str:
+    if status is None:
+        return ""
+    if status >= 500:
+        return RED
+    if status >= 400:
+        return YELLOW
+    if status >= 300:
+        return CYAN
+    return GREEN
+
+
+def _method_color(method: str) -> str:
+    if method == "POST":
+        return GREEN
+    if method == "GET":
+        return CYAN
+    return BOLD
+
+
+def _format_web_access(
+    method: str, target: str, code, peer: str, clock: Optional[str] = None
+) -> str:
+    status = _http_status_code(code)
+    shown = _sanitize_web_log(str(status if status is not None else code))
+    method = _sanitize_web_log((method or "-").upper())
+    target = _sanitize_web_log(target)
+    peer = _sanitize_web_log(peer) if peer else ""
+    if not clock:
+        clock = datetime.now().strftime("%H:%M:%S")
+    path_col = target.ljust(_WEB_LOG_PATH_WIDTH) if len(target) < _WEB_LOG_PATH_WIDTH else target
+    suffix = f"  {GRAY}{peer}{RESET}" if peer else ""
+    return (
+        f"{GRAY}[web]{RESET} {GRAY}{clock}{RESET}  "
+        f"{_method_color(method)}{method:<{_WEB_LOG_METHOD_WIDTH}}{RESET}"
+        f"{path_col}  {_status_color(status)}{shown}{RESET}{suffix}\n"
+    )
+
+
+def _write_web_log(line: str) -> None:
+    with _web_log_lock:
+        sys.stderr.write(line)
+        sys.stderr.flush()
+
+
 class FofaWebHandler(http.server.BaseHTTPRequestHandler):
     """FOFA Web UI 请求处理器"""
 
     client: Optional[FofaClient] = None
     config_manager: Optional[ConfigManager] = None
 
+    def log_request(self, code="-", size="-"):
+        target = _web_log_target(getattr(self, "path", "") or "/")
+        status = _http_status_code(code)
+        if _web_access_quiet(target.split("?", 1)[0], status):
+            return
+        method = getattr(self, "command", None) or "-"
+        peer = _web_peer_label(getattr(self, "client_address", None))
+        if _homepage_burst(method, target, status, peer):
+            return
+        _write_web_log(_format_web_access(method, target, code, peer))
+
+    def log_error(self, format, *args):
+        # send_error 会先打这条，紧接着 log_request 再打一行状态码，去掉重复。
+        if format == "code %d, message %s":
+            return
+        self.log_message(format, *args)
+
     def log_message(self, format, *args):
-        src = self.client_address[0] if self.client_address else "?"
-        sys.stderr.write(f"[web] {src} {format % args}\n")
+        try:
+            message = format % args
+        except (TypeError, ValueError):
+            message = " ".join(str(part) for part in (format, *args))
+        message = message.translate(_control_char_table())
+        peer = _web_peer_label(getattr(self, "client_address", None))
+        prefix = f"{peer} " if peer else ""
+        _write_web_log(f"[web] {prefix}{message}\n")
 
     def _send_json(self, data: dict, status: int = 200):
         self.send_response(status)

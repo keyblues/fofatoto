@@ -1567,5 +1567,164 @@ class UpdateCheckTest(unittest.TestCase):
         announce.assert_not_called()
 
 
+def _plain_log(text: str) -> str:
+    return re.sub(r"\033\[[0-9;]*m", "", text)
+
+
+class WebAccessLogTest(unittest.TestCase):
+    """Web UI 启动后的 CLI 访问日志：轮询与浏览器探测静默，操作与错误保留。"""
+
+    def setUp(self):
+        fofatoto._web_home_seen.clear()
+
+    def _handler(self, method, path, peer="127.0.0.1"):
+        handler = fofatoto.FofaWebHandler.__new__(fofatoto.FofaWebHandler)
+        handler.command = method
+        handler.path = path
+        handler.client_address = (peer, 12345)
+        return handler
+
+    def _logged(self, handler, code=200, error=None):
+        buf = io.StringIO()
+        with mock.patch.object(sys, "stderr", buf):
+            if error is None:
+                handler.log_request(code)
+            else:
+                handler.log_error(*error)
+        return _plain_log(buf.getvalue())
+
+    def _at(self, method, target, code, peer="", clock="14:48:02"):
+        return _plain_log(fofatoto._format_web_access(method, target, code, peer, clock))
+
+    def test_access_line_aligns_method_path_and_status(self):
+        search = self._at("GET", "/api/search", 200)
+        home = self._at("POST", "/", 201)
+        download = self._at("GET", "/api/export/download?format=csv", 200)
+        self.assertEqual(
+            search,
+            "[web] 14:48:02  GET   /api/search               200\n",
+        )
+        self.assertEqual(search.index("200"), home.index("201"))
+        self.assertIn("GET   /api/search", search)
+        self.assertIn("POST  /", home)
+        self.assertTrue(download.endswith("  200\n"))
+        self.assertIn("/api/export/download?format=csv", download)
+        self.assertGreater(download.index("200"), search.index("200"))
+
+    def test_quiet_progress_polls_and_browser_probes(self):
+        cases = [
+            ("GET", "/api/progress?task_id=abc", 200),
+            ("GET", "/favicon.ico", 404),
+            ("GET", "/robots.txt", 404),
+            ("GET", "/apple-touch-icon.png", 404),
+            ("GET", "/json/version", 404),
+            ("GET", "/json", 404),
+            ("GET", "/json/list", 404),
+            ("GET", "/devtools/page/1", 404),
+            ("GET", "/.well-known/appspecific/com.chrome.devtools.json", 404),
+        ]
+        for method, path, code in cases:
+            with self.subTest(path=path, code=code):
+                self.assertEqual(self._logged(self._handler(method, path), code), "")
+
+    def test_account_and_update_checks_are_logged_with_peer(self):
+        info = self._logged(self._handler("GET", "/api/info"), 200)
+        update = self._logged(self._handler("GET", "/api/update"), 200)
+        self.assertEqual(info, self._at("GET", "/api/info", 200, "127.0.0.1", clock=info[6:14]))
+        self.assertEqual(
+            update, self._at("GET", "/api/update", 200, "127.0.0.1", clock=update[6:14])
+        )
+
+    def test_devtools_probe_error_still_logged(self):
+        line = self._logged(self._handler("GET", "/json/version"), 500)
+        self.assertIn("/json/version", line)
+        self.assertIn("127.0.0.1", line)
+        self.assertTrue(line.endswith("500  127.0.0.1\n"))
+
+    def test_repeated_homepage_loads_collapse(self):
+        handler = self._handler("GET", "/")
+        times = iter([0.0, 1.0, 31.0])
+        with mock.patch.object(fofatoto.time, "monotonic", side_effect=lambda: next(times)):
+            first = self._logged(handler, 200)
+            second = self._logged(handler, 200)
+            third = self._logged(handler, 200)
+        self.assertEqual(first, self._at("GET", "/", 200, "127.0.0.1", clock=first[6:14]))
+        self.assertEqual(second, "")
+        self.assertIn("GET   /", third)
+        self.assertTrue(third.endswith("200  127.0.0.1\n"))
+
+    def test_progress_error_still_logged(self):
+        line = self._logged(
+            self._handler("GET", "/api/progress?task_id=abc"), 500
+        )
+        self.assertEqual(
+            line, self._at("GET", "/api/progress", 500, "127.0.0.1", clock=line[6:14])
+        )
+        self.assertNotIn("task_id", line)
+
+    def test_user_actions_include_client_ip(self):
+        page = self._logged(self._handler("GET", "/"), 200)
+        search = self._logged(self._handler("POST", "/api/search"), 200)
+        download = self._logged(
+            self._handler(
+                "GET", "/api/export/download?task_id=abc&format=csv"
+            ),
+            200,
+        )
+        self.assertEqual(page, self._at("GET", "/", 200, "127.0.0.1", clock=page[6:14]))
+        self.assertEqual(
+            search, self._at("POST", "/api/search", 200, "127.0.0.1", clock=search[6:14])
+        )
+        self.assertEqual(
+            download,
+            self._at(
+                "GET",
+                "/api/export/download?format=csv",
+                200,
+                "127.0.0.1",
+                clock=download[6:14],
+            ),
+        )
+        self.assertNotIn("task_id", download)
+
+    def test_lan_peer_is_kept(self):
+        line = self._logged(
+            self._handler("POST", "/api/export", peer="192.168.1.20"), 200
+        )
+        self.assertEqual(
+            line,
+            self._at("POST", "/api/export", 200, "192.168.1.20", clock=line[6:14]),
+        )
+        self.assertTrue(line.endswith("  200  192.168.1.20\n"))
+
+    def test_ipv6_loopback_is_kept(self):
+        line = self._logged(self._handler("POST", "/api/icon", peer="::1"), 200)
+        self.assertEqual(line, self._at("POST", "/api/icon", 200, "::1", clock=line[6:14]))
+        self.assertTrue(line.endswith("  200  ::1\n"))
+
+    def test_control_chars_do_not_break_the_line(self):
+        line = self._logged(self._handler("GET", "/foo\nbar"), 404)
+        self.assertEqual(line.count("\n"), 1)
+        self.assertNotIn("\nbar", line)
+        self.assertIn("GET   /foo", line)
+        self.assertTrue(line.endswith("404  127.0.0.1\n"))
+
+    def test_send_error_boilerplate_is_not_duplicated(self):
+        handler = self._handler("GET", "/nope")
+        self.assertEqual(
+            self._logged(handler, error=("code %d, message %s", 400, "Bad Request")),
+            "",
+        )
+        line = self._logged(handler, 400)
+        self.assertEqual(line, self._at("GET", "/nope", 400, "127.0.0.1", clock=line[6:14]))
+
+    def test_unexpected_log_error_is_kept(self):
+        line = self._logged(
+            self._handler("GET", "/"),
+            error=("Request timed out: %r", TimeoutError("slow")),
+        )
+        self.assertIn("[web] 127.0.0.1 Request timed out:", line)
+
+
 if __name__ == "__main__":
     unittest.main()
