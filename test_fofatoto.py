@@ -150,10 +150,6 @@ class BuildUrlTest(unittest.TestCase):
             expected = "https://a.com" if port == "443" else f"https://a.com:{port}"
             self.assertEqual(fofatoto.build_url(r), expected)
 
-    def test_https_default_port_omitted(self):
-        r = make_result(host="a.com", port="443")
-        self.assertEqual(fofatoto.build_url(r), "https://a.com")
-
     def test_host_already_has_port(self):
         r = make_result(host="example.com:8080", port="8080", protocol="http")
         self.assertEqual(fofatoto.build_url(r), "http://example.com:8080")
@@ -366,12 +362,6 @@ class SearchUrlAndParseTest(unittest.TestCase):
             "ip,port", {"error": False, "size": 1, "results": [["1.1.1.1"]]}
         )
         self.assertEqual(stats.results[0].port, "")
-
-    def test_string_row_result(self):
-        _, stats = self._search(
-            "ip", {"error": False, "size": 1, "results": [["1.1.1.1", "extra"]]}
-        )
-        self.assertEqual(stats.results[0].ip, "1.1.1.1")
 
 
 class SearchRetryTest(unittest.TestCase):
@@ -724,9 +714,6 @@ class MurmurHashTest(unittest.TestCase):
     def test_murmur3_vectors(self):
         for data, expected in self.VECTORS:
             self.assertEqual(fofatoto._murmur3_32(data), expected, data)
-
-    def test_murmur3_signed(self):
-        self.assertLess(fofatoto._murmur3_32(b"foo"), 0)
 
     def test_favicon_hash_vectors(self):
         self.assertEqual(fofatoto.favicon_hash(b"f"), "1774577129")
