@@ -559,7 +559,6 @@ def render_web_html() -> str:
 
 
 class ConfigManager:
-    """配置管理器"""
 
     def __init__(self):
         self.config_dir = self._get_config_dir()
@@ -589,7 +588,6 @@ class ConfigManager:
         return entry.parent
 
     def ensure_exists(self) -> bool:
-        """检测配置文件是否存在，如不存在则自动生成默认配置文件"""
         if self.config_file.exists():
             return True
 
@@ -607,7 +605,6 @@ class ConfigManager:
             return False
 
     def load(self):
-        """加载配置"""
         if self.config_file.exists():
             try:
                 data = json.loads(self.config_file.read_text(encoding="utf-8"))
@@ -619,7 +616,6 @@ class ConfigManager:
         return self
 
     def is_valid(self) -> bool:
-        """验证配置是否有效"""
         placeholder_keys = {
             DEFAULT_CONFIG["key"],
             "your-api-key",
@@ -1200,15 +1196,6 @@ class FofaClient:
         self.info_api = info_api  # 中转站账户信息 API（由 _detect_relay_info_api 自动填充）
 
     def get_usage(self) -> dict:
-        """
-        获取账户信息。
-
-        若自动识别到已知中转站，调用对应接口并将响应
-        归一化为标准 FOFA 字段格式；否则调用标准 /api/v1/info/my 接口。
-
-        Returns:
-            包含用户信息的字典
-        """
         if self.info_api:
             return self._get_usage_relay()
         api_url = f"{self.base_url}/api/v1/info/my?key={quote(self.key, safe='')}"
@@ -1253,22 +1240,6 @@ class FofaClient:
         retry_callback: Optional[Callable[[int, int, Exception], None]] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
     ) -> SearchStats:
-        """
-        执行 FOFA 查询
-
-        Args:
-            query: FOFA 查询语句
-            size: 返回数量（最大 10000）
-            page: 页码（默认为1）
-            fields: 返回字段，默认为 DEFAULT_FIELDS
-            full: 是否搜索全部数据（不止一年）
-            max_retries: 失败重试次数
-            retry_callback: 重试回调
-            cancel_check: 取消检查函数，返回 True 时抛 KeyboardInterrupt 中断
-
-        Returns:
-            SearchStats 对象，包含结果列表、总匹配数和独立 IP 数
-        """
         if fields is None:
             fields = DEFAULT_FIELDS
         else:
@@ -1356,19 +1327,6 @@ class FofaClient:
         2. 每批记录本批中最小的 lastupdatetime，作为下次查询的 before 值
         3. 直到某批数据不足 10000 条或达到目标数量
         4. 合并所有结果并去重
-
-        Args:
-            query: FOFA 查询语句
-            max_size: 最大返回数量（0 表示不限制）
-            fields: 返回字段
-            fill_percent: 完成百分比（0.0-1.0），默认 0.8
-            api_rate_limit: API 频率限制（秒），默认 5 秒
-            full: 是否搜索全部数据
-            progress_callback: 进度回调函数，用于解耦控制台输出
-            cancel_check: 取消检查函数，返回 True 时抛 KeyboardInterrupt 中断
-
-        Returns:
-            SearchStats 对象
         """
         if fields is None:
             fields = DEFAULT_FIELDS
@@ -1688,7 +1646,6 @@ def dedup_results(
 
 
 class Exporter:
-    """导出管理器"""
 
     # 默认导出列 = 全部已知字段，单一来源见 ALL_FIELD_NAMES（序同 FofaResult）
 
@@ -1835,9 +1792,6 @@ def parse_limit_value(limit: str) -> tuple[bool, int]:
         raise ValueError("-l/--limit 必须大于 0，或使用 'max'")
 
     return False, limit_value
-
-
-# ============ 主函数 ============
 
 
 def create_console_progress_callback(bar_width=25):
@@ -2177,7 +2131,6 @@ def handle_icon_mode(client: FofaClient, args):
 
 def handle_single_mode(client: FofaClient, args):
     """处理单次查询模式"""
-    # 没有查询语句时报错 (这部分交给调用者处理更好，但在内部处理也可以)
     if not any([args.csv, args.txt, args.json]):
         args.csv = True
 
@@ -3248,10 +3201,8 @@ def main():
     config_manager = ConfigManager()
     config_file_ready = config_manager.ensure_exists()
 
-    # 显示 Banner
     print(BANNER)
 
-    # 加载配置
     config_manager.load()
 
     client = None
@@ -3265,7 +3216,6 @@ def main():
     else:
         client = config_manager.get_client()
 
-    # Web UI 模式: -w 参数 或 无参数直接运行
     if web_mode:
         try:
             server = FofaWebServer(
@@ -3313,17 +3263,6 @@ def main():
 def expand_placeholder_query(
     base_query: str, targets: list[str], placeholder: str
 ) -> list[tuple[str, int]]:
-    """
-    将占位符替换为具体值
-
-    Args:
-        base_query: 包含占位符的基础查询语句，如 "host={}"
-        targets: 目标值列表
-        placeholder: 占位符格式，如 "{}"
-
-    Returns:
-        [(替换后的查询语句, 目标索引), ...]
-    """
     results = []
     for idx, target in enumerate(targets, 1):
         query = base_query.replace(placeholder, target)
@@ -3332,15 +3271,6 @@ def expand_placeholder_query(
 
 
 def load_batch_targets(file_path: Path) -> list[tuple[str, int]]:
-    """
-    加载批量目标文件
-
-    Args:
-        file_path: 批量目标文件路径
-
-    Returns:
-        [(目标值, 行号), ...]
-    """
     if not file_path.exists():
         raise FileNotFoundError(f"批量目标文件不存在: {file_path}")
 
@@ -3362,17 +3292,6 @@ def load_batch_targets(file_path: Path) -> list[tuple[str, int]]:
 def run_batch_search(
     client: FofaClient, queries: list[tuple[str, int]], args
 ) -> list[FofaResult]:
-    """
-    执行批量查询
-
-    Args:
-        client: FOFA 客户端
-        queries: [(查询语句, 行号), ...]
-        args: 命令行参数
-
-    Returns:
-        所有查询的结果列表
-    """
     all_results = []
     total_queries = len(queries)
     is_max, limit_value = parse_limit_value(args.limit)
