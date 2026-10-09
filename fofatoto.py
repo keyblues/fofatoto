@@ -1442,8 +1442,6 @@ class FofaClient:
                 total_quota_used=total_quota_used,
             )
 
-        trigger_cb("start")
-
         before_time = None
         batch_num = 0
         interrupted = False
@@ -1552,9 +1550,6 @@ class FofaClient:
                     break
 
                 _sleep_interruptible(current_rate_limit, cancel_check)
-
-                if max_size > 0 and len(all_results) >= max_size:
-                    break
         except KeyboardInterrupt:
             interrupted = True
             partial_error = "Interrupted by user"
@@ -1861,9 +1856,6 @@ def create_console_progress_callback(bar_width=25):
         elif event == "skip_zero_target":
             finish_progress_line()
             print("[*] 目标为 0，跳过批量抓取")
-
-        elif event == "start":
-            pass  # 可以在这里打印"开始..."，目前推迟到第一个progress事件
 
         elif event == "progress":
             fetched = state.get("fetched", 0)
@@ -2365,7 +2357,7 @@ def _make_task_cancel_check(task_id: str):
     return cancel_check
 
 
-def _create_web_progress_callback(task_id: str, max_size: int = 0):
+def _create_web_progress_callback(task_id: str):
     def progress_callback(state: dict):
         cancelled = False
         with _export_lock:
@@ -2381,8 +2373,6 @@ def _create_web_progress_callback(task_id: str, max_size: int = 0):
             elif event == "init":
                 task.total_estimated = state.get("total_estimated", 0)
                 task.target_count = state.get("target_count", 0)
-                if max_size > 0 and task.target_count > 0:
-                    task.target_count = min(task.target_count, max_size)
                 task.message = "正在按时间游标分批拉取数据"
             elif event == "progress":
                 task.fetched = state.get("fetched", 0)
@@ -2793,7 +2783,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                 fields=fields,
                 fill_percent=fill_percent,
                 full=full,
-                progress_callback=_create_web_progress_callback(task_id, max_size),
+                progress_callback=_create_web_progress_callback(task_id),
                 cancel_check=_make_task_cancel_check(task_id),
             )
 
