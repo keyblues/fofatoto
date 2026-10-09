@@ -84,6 +84,7 @@ GREEN = "\033[92m" if COLOR_ENABLED else ""
 YELLOW = "\033[93m" if COLOR_ENABLED else ""
 RED = "\033[91m" if COLOR_ENABLED else ""
 CYAN = "\033[96m" if COLOR_ENABLED else ""
+GRAY = "\033[90m" if COLOR_ENABLED else ""
 BOLD = "\033[1m" if COLOR_ENABLED else ""
 RESET = "\033[0m" if COLOR_ENABLED else ""
 
@@ -125,6 +126,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Micr
 .header .logo{font-weight:700;font-size:17px;line-height:1;letter-spacing:1.5px;color:#e2e8f0;text-decoration:none;white-space:nowrap}
 .header .logo:hover{color:#fff}
 .version-badge{display:inline-block;font-size:11px;line-height:1;font-weight:600;letter-spacing:0;color:#94a3b8;white-space:nowrap}
+.update-badge{display:none;font-size:11px;line-height:1;font-weight:600;color:#fbd38d;text-decoration:none;border:1px solid rgba(251,211,141,.45);border-radius:999px;padding:3px 7px;white-space:nowrap}
+.update-badge:hover{color:#fff;border-color:#fbd38d}
 .header .account{display:flex;gap:12px;align-items:center;justify-content:flex-end;flex-wrap:wrap;font-size:12px;color:#a0aec0;min-width:0;text-align:right}
 .header .account strong{color:#e2e8f0}
 .vip-badge{padding:2px 8px;border-radius:2px;font-size:11px;font-weight:600}
@@ -319,7 +322,7 @@ td{max-width:240px}
 </head>
 <body>
 <div class="header">
-<div class="brand"><a class="logo" href="__GITHUB_URL__" target="_blank" rel="noopener">FOFATOTO</a><span class="version-badge">v__APP_VERSION__</span></div>
+<div class="brand"><a class="logo" href="__GITHUB_URL__" target="_blank" rel="noopener">FOFATOTO</a><span class="version-badge">v__APP_VERSION__</span><a class="update-badge" id="updateBadge" target="_blank" rel="noopener"></a></div>
 <div class="account" id="accountInfo">加载中...</div>
 </div>
 <div class="container">
@@ -428,7 +431,7 @@ function toggleField(f){var i=selectedFields.indexOf(f);if(i>-1)selectedFields.s
 function removeField(f){var i=selectedFields.indexOf(f);if(i>-1){selectedFields.splice(i,1);renderChips();renderFieldPanel()}}
 function filterFields(){var q=document.getElementById("fpSearch").value.trim().toLowerCase();var total=0;document.querySelectorAll("#fpBody .fp-category").forEach(function(cat){var v=0;cat.querySelectorAll(".fp-field").forEach(function(b){var m=!q||b.dataset.field.indexOf(q)>-1;b.classList.toggle("hidden",!m);if(m){v++;total++}});cat.style.display=v>0?"":"none"});var old=document.getElementById("fpEmpty");if(total===0&&q){if(!old){var el=document.createElement("div");el.id="fpEmpty";el.className="fp-empty";el.textContent="无匹配字段";document.getElementById("fpBody").appendChild(el)}}else if(old)old.remove()}
 function getSelectedFields(){return selectedFields.join(",")}
-document.addEventListener("DOMContentLoaded",function(){initFieldSelector();loadAccountInfo(false).finally(function(){lastAccountRefresh=Date.now()});setupModeTabs();setupSearchShortcut();setupQueryDropTarget();var sh=document.getElementById("showHistory");if(sh)sh.checked=getShowHistory();updateLayout();startAccountRefresh();document.addEventListener("visibilitychange",onVisibilityChange);window.addEventListener("resize",function(){autoResizeQueryInput();updateLayout();renderVirtual()})});
+document.addEventListener("DOMContentLoaded",function(){checkUpdate();initFieldSelector();loadAccountInfo(false).finally(function(){lastAccountRefresh=Date.now()});setupModeTabs();setupSearchShortcut();setupQueryDropTarget();var sh=document.getElementById("showHistory");if(sh)sh.checked=getShowHistory();updateLayout();startAccountRefresh();document.addEventListener("visibilitychange",onVisibilityChange);window.addEventListener("resize",function(){autoResizeQueryInput();updateLayout();renderVirtual()})});
 function setupModeTabs(){document.querySelectorAll(".mode-tab").forEach(function(t){t.addEventListener("click",function(){switchMode(this.dataset.mode)})})}
 function modeButtonText(){return currentMode==="instant"?"搜索":(currentMode==="export"?"导出":"批量查询")}
 function refreshModeButton(){var btn=document.getElementById("searchBtn");btn.textContent=modeButtonText();btn.className="btn btn-primary"}
@@ -516,6 +519,9 @@ function pickActiveHistory(){if(historyActiveIndex<0||!historyVisibleItems[histo
 function insertHistory(index){try{var history=getHistory();if(history[index]){document.getElementById("queryInput").value=history[index].query;autoResizeQueryInput();switchMode(history[index].mode||"instant");closeHistorySuggestions();document.getElementById("queryInput").focus()}}catch(e){}}
 function deleteHistory(index){try{var history=getHistory();history.splice(index,1);saveHistory(history);renderHistorySuggestions()}catch(e){}}
 document.addEventListener("click",function(e){if(!e.target.closest(".search-input-wrap"))closeHistorySuggestions();if(!e.target.closest(".settings-wrap"))document.getElementById("settingsPopup").classList.remove("show")});
+var updatePolls=0;
+function applyUpdateBadge(d){var el=document.getElementById("updateBadge");if(!el||!d||!d.update_available||!d.latest)return false;var url=String(d.url||"");if(url.indexOf("__GITHUB_URL__/releases/")!==0)return false;el.href=url;el.textContent="新版本 v"+d.latest;el.title="当前 v"+(d.current||"")+"，点击打开发布页";el.style.display="inline-block";updateLayout();return true}
+function checkUpdate(){fetch("/api/update").then(function(r){return r.json()}).then(function(data){var d=(data&&data.data)||{};if(applyUpdateBadge(d))return;if(d.pending&&updatePolls<4){updatePolls++;setTimeout(checkUpdate,1500)}}).catch(function(){})}
 function escHtml(str){var div=document.createElement("div");div.appendChild(document.createTextNode(str));return div.innerHTML}
 function escAttr(str){return escHtml(str).replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 </script>
@@ -639,6 +645,370 @@ class ConfigManager:
             self._client = FofaClient(self.url, self.key, info_api=info_api)
             self._client_signature = signature
         return self._client
+
+
+# ============ 更新检查 ============
+
+# 启动时对照 GitHub Releases。失败（离线、超时、限流）静默跳过，不打断查询。
+# 成功结果缓存 12 小时，失败缓存 1 小时，避免每次启动都访问网络。
+UPDATE_CHECK_TIMEOUT = 3
+UPDATE_CACHE_TTL = 12 * 60 * 60
+UPDATE_FAIL_TTL = 60 * 60
+UPDATE_RESPONSE_LIMIT = 256 * 1024
+_UPDATE_CACHE_NAME = ".fofatoto_update.json"
+
+_update_lock = threading.Lock()
+_update_status: Optional["UpdateStatus"] = None
+_update_inflight = False
+_update_announce = False
+_update_check_forced_off = False
+
+
+@dataclass
+class UpdateStatus:
+    """一次版本检查的结果。ok=False 表示这次没拿到发布信息。"""
+
+    current: str
+    latest: Optional[str] = None
+    url: Optional[str] = None
+    update_available: bool = False
+    checked_at: float = 0.0
+    ok: bool = False
+
+    def to_public(self) -> dict:
+        show = self.update_available and bool(self.latest) and bool(self.url)
+        return {
+            "current": self.current,
+            "latest": self.latest if show else None,
+            "update_available": show,
+            "url": self.url if show else None,
+            "pending": False,
+        }
+
+
+def _empty_update_public(*, pending: bool = False) -> dict:
+    return {
+        "current": APP_VERSION,
+        "latest": None,
+        "update_available": False,
+        "url": None,
+        "pending": pending,
+    }
+
+
+def suppress_update_check() -> None:
+    """本次进程不再检查更新（--no-update-check）。"""
+    global _update_check_forced_off
+    _update_check_forced_off = True
+
+
+def update_check_disabled() -> bool:
+    if _update_check_forced_off:
+        return True
+    return os.environ.get("FOFATOTO_NO_UPDATE_CHECK", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _reset_update_check_state() -> None:
+    """清空内存中的检查状态。测试隔离用。"""
+    global _update_status, _update_inflight, _update_announce, _update_check_forced_off
+    with _update_lock:
+        _update_status = None
+        _update_inflight = False
+        _update_announce = False
+        _update_check_forced_off = False
+
+
+def parse_version(value: str) -> Optional[tuple[int, ...]]:
+    """解析 v1.2.3 / 1.2.3。预发布后缀与其他文本返回 None。"""
+    if not isinstance(value, str):
+        return None
+    matched = re.fullmatch(r"[vV]?(\d+(?:\.\d+){0,3})", value.strip())
+    if not matched:
+        return None
+    return tuple(int(part) for part in matched.group(1).split("."))
+
+
+def is_newer_version(latest: str, current: str) -> bool:
+    new = parse_version(latest)
+    old = parse_version(current)
+    if new is None or old is None:
+        return False
+    width = max(len(new), len(old))
+    new = new + (0,) * (width - len(new))
+    old = old + (0,) * (width - len(old))
+    return new > old
+
+
+def _github_release_api() -> Optional[str]:
+    parsed = urlparse(GITHUB_URL)
+    if parsed.scheme != "https" or parsed.netloc.lower() != "github.com":
+        return None
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) != 2:
+        return None
+    owner, repo = parts
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", owner):
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", repo):
+        return None
+    return f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
+
+
+def _trusted_release_url(tag: str, html_url: str) -> str:
+    """只接受本仓库 releases 下的 https 链接，其余回退到 tag 页。"""
+    base = GITHUB_URL.rstrip("/")
+    prefix = base + "/releases/"
+    candidate = html_url.strip() if isinstance(html_url, str) else ""
+    if candidate.startswith(prefix) and not any(ch in candidate for ch in ' \t\r\n\\<>"\''):
+        return candidate
+    safe_tag = tag.strip()
+    if re.fullmatch(r"[vV]?\d+(?:\.\d+){0,3}", safe_tag):
+        if not safe_tag.lower().startswith("v"):
+            safe_tag = "v" + safe_tag
+        return f"{base}/releases/tag/{safe_tag}"
+    return f"{base}/releases"
+
+
+def _read_limited(resp, limit: int) -> Optional[bytes]:
+    chunks: list[bytes] = []
+    total = 0
+    while total <= limit:
+        part = resp.read(min(65536, limit - total + 1))
+        if not part:
+            break
+        chunks.append(part)
+        total += len(part)
+        if total > limit:
+            return None
+    return b"".join(chunks)
+
+
+def fetch_latest_release(timeout: float = UPDATE_CHECK_TIMEOUT) -> Optional[tuple[str, str]]:
+    """请求 GitHub latest release。返回 (version, url)；任何失败返回 None。"""
+    api = _github_release_api()
+    if not api:
+        return None
+    req = urllib.request.Request(
+        api,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"fofatoto/{APP_VERSION}",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = _read_limited(resp, UPDATE_RESPONSE_LIMIT)
+    except Exception:
+        return None
+    if not raw:
+        return None
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("draft") or payload.get("prerelease"):
+        return None
+    tag = payload.get("tag_name")
+    if not isinstance(tag, str):
+        return None
+    version = parse_version(tag.strip())
+    if version is None:
+        return None
+    latest = ".".join(str(part) for part in version)
+    html_url = payload.get("html_url")
+    url = _trusted_release_url(tag.strip(), html_url if isinstance(html_url, str) else "")
+    return latest, url
+
+
+def _update_cache_file() -> Path:
+    return ConfigManager()._get_config_dir() / _UPDATE_CACHE_NAME
+
+
+def _cache_ttl(ok: bool) -> float:
+    return UPDATE_CACHE_TTL if ok else UPDATE_FAIL_TTL
+
+
+def _status_from_mapping(data: dict, now: float) -> Optional[UpdateStatus]:
+    if not isinstance(data, dict):
+        return None
+    try:
+        checked_at = float(data.get("checked_at"))
+    except (TypeError, ValueError):
+        return None
+    if checked_at > now + 120:
+        return None
+    ok = bool(data.get("ok"))
+    if now - checked_at >= _cache_ttl(ok):
+        return None
+    latest = data.get("latest") if ok else None
+    url = data.get("url") if ok else None
+    if ok and (not isinstance(latest, str) or parse_version(latest) is None):
+        return None
+    if url is not None and not isinstance(url, str):
+        return None
+    available = bool(latest) and is_newer_version(str(latest), APP_VERSION)
+    if available:
+        url = _trusted_release_url(f"v{latest}", url or "")
+    else:
+        url = None
+    return UpdateStatus(
+        current=APP_VERSION,
+        latest=latest if available else None,
+        url=url,
+        update_available=available,
+        checked_at=checked_at,
+        ok=ok,
+    )
+
+
+def _memory_if_fresh(now: float) -> Optional[UpdateStatus]:
+    status = _update_status
+    if status is None:
+        return None
+    if status.checked_at > now + 120:
+        return None
+    if now - status.checked_at >= _cache_ttl(status.ok):
+        return None
+    return status
+
+
+def _read_disk_cache(now: float) -> Optional[UpdateStatus]:
+    try:
+        data = json.loads(_update_cache_file().read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return _status_from_mapping(data, now)
+
+
+def _write_disk_cache(status: UpdateStatus) -> None:
+    payload = {
+        "checked_at": status.checked_at,
+        "ok": status.ok,
+        "latest": status.latest,
+        "url": status.url,
+    }
+    try:
+        _update_cache_file().write_text(
+            json.dumps(payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception:
+        return
+
+
+def _remember(status: UpdateStatus) -> None:
+    global _update_status
+    with _update_lock:
+        _update_status = status
+
+
+def _fresh_status(now: Optional[float] = None) -> Optional[UpdateStatus]:
+    now = time.time() if now is None else now
+    with _update_lock:
+        status = _memory_if_fresh(now)
+    if status is not None:
+        return status
+    loaded = _read_disk_cache(now)
+    if loaded is None:
+        return None
+    _remember(loaded)
+    return loaded
+
+
+def _fetch_and_store() -> UpdateStatus:
+    checked_at = time.time()
+    found = fetch_latest_release(UPDATE_CHECK_TIMEOUT)
+    if not found:
+        status = UpdateStatus(current=APP_VERSION, checked_at=checked_at, ok=False)
+    else:
+        latest, url = found
+        status = UpdateStatus(
+            current=APP_VERSION,
+            latest=latest,
+            url=url,
+            update_available=is_newer_version(latest, APP_VERSION),
+            checked_at=checked_at,
+            ok=True,
+        )
+    _remember(status)
+    _write_disk_cache(status)
+    return status
+
+
+def _print_update_notice(status: UpdateStatus) -> None:
+    if not status.update_available or not status.latest or not status.url:
+        return
+    print(
+        f"{YELLOW}[*] 发现新版本 v{status.latest}（当前 v{status.current}）: {status.url}{RESET}"
+    )
+
+
+def _start_async_update(*, announce: bool) -> None:
+    global _update_inflight, _update_announce
+    with _update_lock:
+        if _update_inflight:
+            if announce:
+                _update_announce = True
+            return
+        _update_inflight = True
+        if announce:
+            _update_announce = True
+    threading.Thread(
+        target=_update_worker, name="fofatoto-update", daemon=True
+    ).start()
+
+
+def _update_worker() -> None:
+    global _update_inflight, _update_announce
+    try:
+        status = _fetch_and_store()
+        with _update_lock:
+            announce = _update_announce
+        if announce:
+            _print_update_notice(status)
+    finally:
+        with _update_lock:
+            _update_inflight = False
+            _update_announce = False
+
+
+def announce_update(*, blocking: bool) -> None:
+    """CLI 阻塞检查；Web 启动后后台检查并在有新版本时打印一行。"""
+    try:
+        if update_check_disabled():
+            return
+        cached = _fresh_status()
+        if cached is not None:
+            _print_update_notice(cached)
+            return
+        if not blocking:
+            _start_async_update(announce=True)
+            return
+        _print_update_notice(_fetch_and_store())
+    except Exception:
+        return
+
+
+def snapshot_update() -> dict:
+    """Web `/api/update` 的载荷。缓存未命中时后台检查，并标记 pending。"""
+    try:
+        if update_check_disabled():
+            return _empty_update_public()
+        cached = _fresh_status()
+        if cached is not None:
+            return cached.to_public()
+        _start_async_update(announce=False)
+        return _empty_update_public(pending=True)
+    except Exception:
+        return _empty_update_public()
 
 
 # ============ FOFA API 相关 ============
@@ -1993,6 +2363,11 @@ def build_parser():
         action="store_true",
         help="快速检测：仅显示账户信息后退出",
     )
+    parser.add_argument(
+        "--no-update-check",
+        action="store_true",
+        help="跳过启动时的 GitHub 版本检查（也可设置环境变量 FOFATOTO_NO_UPDATE_CHECK=1）",
+    )
     return parser
 
 
@@ -2474,15 +2849,165 @@ def _write_web_exports(prefix: str, results: list, fields: str) -> dict:
     return output_files
 
 
+# 成功的轮询与浏览器探测不进 CLI。页面本身在短时间内的重复打开也合并成一行。
+_WEB_QUIET_PATHS = frozenset({"/api/progress"})
+_WEB_LOG_METHOD_WIDTH = 6
+_WEB_LOG_PATH_WIDTH = 24
+_WEB_HOME_BURST_SEC = 30.0
+_web_log_lock = threading.Lock()
+_web_home_seen: dict[tuple[str, int], float] = {}
+
+
+def _http_status_code(code) -> Optional[int]:
+    if isinstance(code, http.HTTPStatus):
+        return int(code)
+    try:
+        return int(code)
+    except (TypeError, ValueError):
+        return None
+
+
+def _control_char_table():
+    table = getattr(http.server.BaseHTTPRequestHandler, "_control_char_table", None)
+    if table is not None:
+        return table
+    return str.maketrans({c: rf"\x{c:02x}" for c in range(32) if c not in (9, 10, 13)} | {127: r"\x7f"})
+
+
+def _sanitize_web_log(text: str) -> str:
+    return text.translate(_control_char_table())
+
+
+def _web_peer_label(address) -> str:
+    """访问日志保留来源地址，本机回环也打印。"""
+    if not address:
+        return ""
+    host = address[0] if isinstance(address, tuple) else str(address)
+    return _sanitize_web_log(host)
+
+
+def _web_log_target(path: str) -> str:
+    """访问日志只保留路径；下载请求附带 format，不回显 task_id 等查询串。"""
+    parsed = urlparse(path or "/")
+    clean = (parsed.path or "/").rstrip("/") or "/"
+    if clean == "/api/export/download":
+        fmt = parse_qs(parsed.query).get("format", [""])[0]
+        if isinstance(fmt, str) and re.fullmatch(r"[A-Za-z0-9]+", fmt):
+            return f"{clean}?format={fmt}"
+    return clean
+
+
+def _browser_probe(path: str) -> bool:
+    """浏览器和调试器自己发的探测，不是用户操作。"""
+    if path in ("/favicon.ico", "/robots.txt") or path.startswith("/apple-touch-icon"):
+        return True
+    # Chrome / Edge / IDE 会把本机端口当成 DevTools，反复请求这些路径。
+    if path == "/json" or path.startswith("/json/") or path.startswith("/devtools/"):
+        return True
+    return path.startswith("/.well-known/")
+
+
+def _web_access_quiet(path: str, status: Optional[int]) -> bool:
+    if status is not None and status >= 500:
+        return False
+    if _browser_probe(path):
+        return True
+    return status is not None and status < 400 and path in _WEB_QUIET_PATHS
+
+
+def _homepage_burst(method: str, target: str, status: Optional[int], peer: str) -> bool:
+    """同一来源短时间反复打开页面时只保留第一行。"""
+    if method.upper() != "GET" or target != "/" or status is None or status >= 400:
+        return False
+    now = time.monotonic()
+    key = (peer, status)
+    with _web_log_lock:
+        last = _web_home_seen.get(key)
+        _web_home_seen[key] = now
+        if len(_web_home_seen) > 64:
+            cutoff = now - _WEB_HOME_BURST_SEC
+            for stale in [item for item, seen in _web_home_seen.items() if seen < cutoff]:
+                _web_home_seen.pop(stale, None)
+        return last is not None and (now - last) < _WEB_HOME_BURST_SEC
+
+
+def _status_color(status: Optional[int]) -> str:
+    if status is None:
+        return ""
+    if status >= 500:
+        return RED
+    if status >= 400:
+        return YELLOW
+    if status >= 300:
+        return CYAN
+    return GREEN
+
+
+def _method_color(method: str) -> str:
+    if method == "POST":
+        return GREEN
+    if method == "GET":
+        return CYAN
+    return BOLD
+
+
+def _format_web_access(
+    method: str, target: str, code, peer: str, clock: Optional[str] = None
+) -> str:
+    status = _http_status_code(code)
+    shown = _sanitize_web_log(str(status if status is not None else code))
+    method = _sanitize_web_log((method or "-").upper())
+    target = _sanitize_web_log(target)
+    peer = _sanitize_web_log(peer) if peer else ""
+    if not clock:
+        clock = datetime.now().strftime("%H:%M:%S")
+    path_col = target.ljust(_WEB_LOG_PATH_WIDTH) if len(target) < _WEB_LOG_PATH_WIDTH else target
+    suffix = f"  {GRAY}{peer}{RESET}" if peer else ""
+    return (
+        f"{GRAY}[web]{RESET} {GRAY}{clock}{RESET}  "
+        f"{_method_color(method)}{method:<{_WEB_LOG_METHOD_WIDTH}}{RESET}"
+        f"{path_col}  {_status_color(status)}{shown}{RESET}{suffix}\n"
+    )
+
+
+def _write_web_log(line: str) -> None:
+    with _web_log_lock:
+        sys.stderr.write(line)
+        sys.stderr.flush()
+
+
 class FofaWebHandler(http.server.BaseHTTPRequestHandler):
     """FOFA Web UI 请求处理器"""
 
     client: Optional[FofaClient] = None
     config_manager: Optional[ConfigManager] = None
 
+    def log_request(self, code="-", size="-"):
+        target = _web_log_target(getattr(self, "path", "") or "/")
+        status = _http_status_code(code)
+        if _web_access_quiet(target.split("?", 1)[0], status):
+            return
+        method = getattr(self, "command", None) or "-"
+        peer = _web_peer_label(getattr(self, "client_address", None))
+        if _homepage_burst(method, target, status, peer):
+            return
+        _write_web_log(_format_web_access(method, target, code, peer))
+
+    def log_error(self, format, *args):
+        # send_error 会先打这条，紧接着 log_request 再打一行状态码，去掉重复。
+        if format == "code %d, message %s":
+            return
+        self.log_message(format, *args)
+
     def log_message(self, format, *args):
-        src = self.client_address[0] if self.client_address else "?"
-        sys.stderr.write(f"[web] {src} {format % args}\n")
+        try:
+            message = format % args
+        except (TypeError, ValueError):
+            message = " ".join(str(part) for part in (format, *args))
+        message = message.translate(_control_char_table())
+        peer = _web_peer_label(getattr(self, "client_address", None))
+        prefix = f"{peer} " if peer else ""
+        _write_web_log(f"[web] {prefix}{message}\n")
 
     def _send_json(self, data: dict, status: int = 200):
         self.send_response(status)
@@ -2559,6 +3084,8 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             self._send_html(render_web_html())
         elif path == "/api/info":
             self._handle_info()
+        elif path == "/api/update":
+            self._handle_update()
         elif path == "/api/progress":
             self._handle_progress(parsed)
         elif path == "/api/export/download":
@@ -2582,6 +3109,9 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             self._handle_cancel()
         else:
             self._send_json({"success": False, "error": "Not found"}, 404)
+
+    def _handle_update(self):
+        self._send_json({"success": True, "data": snapshot_update()})
 
     def _handle_info(self):
         client = self._current_client()
@@ -3152,6 +3682,8 @@ class FofaWebServer:
                 f"[*] 当前环境无图形桌面，请在浏览器手动打开: {CYAN}{url}{RESET}"
             )
 
+        announce_update(blocking=False)
+
         try:
             self.httpd.serve_forever()
         except KeyboardInterrupt:
@@ -3166,6 +3698,8 @@ class FofaWebServer:
 def main():
     parser = build_parser()
     args = parser.parse_args()
+    if args.no_update_check:
+        suppress_update_check()
     if args.icon and args.web:
         print("[!] --icon 与 -w/--web 不能同时使用", file=sys.stderr)
         sys.exit(1)
@@ -3178,6 +3712,8 @@ def main():
     config_file_ready = config_manager.ensure_exists()
 
     print(BANNER)
+    if not web_mode:
+        announce_update(blocking=True)
 
     config_manager.load()
 
