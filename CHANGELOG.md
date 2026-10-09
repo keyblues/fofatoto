@@ -11,6 +11,9 @@
 - Web 导出面板与批量进度的状态文案改为中文，与单次导出一致：目标进度、重试、部分目标失败，以及取消后面板展示的「已取消」。
 - Web UI 的 CLI 访问日志改为对齐的单行：时间、方法、路径、状态码、来源 IP 分列，方法与状态码按类型着色，本机回环地址同样打印。成功的进度轮询（`/api/progress`），以及浏览器自己的 `favicon.ico`、Chrome DevTools 探测（`/json/version` 等）不再打印；账户信息（`/api/info`）和版本检查（`/api/update`）会打印。同一来源 30 秒内反复打开页面只保留第一行。搜索、导出、下载和 5xx 仍会输出。下载只附带 `format`，不回显 `task_id`。协议层 `send_error` 不再与访问行重复打印。
 
+### 文档
+- AGENTS.md 的组件行号、文件规模和测试计数按合并后的代码刷新（147 项测试）。
+
 ### 其他
 - CI 与文档的 Nuitka 编译命令去掉与 `--noinclude-default-mode=nofollow` 重复的七个 `--noinclude-*-mode`；`check` 任务删除已被单测覆盖的版本号同步 shell 步骤（保留 tag 与版本对照）。
 
