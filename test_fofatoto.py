@@ -605,6 +605,30 @@ class WebHtmlRenderTest(unittest.TestCase):
         self.assertIn('id="batchMaxSize"', fofatoto.WEB_HTML_TEMPLATE)
         self.assertIn("max_size:maxSize", fofatoto.WEB_HTML_TEMPLATE)
 
+    def test_web_links_use_build_url_helper(self):
+        """表格链接与即时预览 TXT 走同一个 buildUrl，规则与 Python build_url 对齐。"""
+        src = fofatoto.WEB_HTML_TEMPLATE
+        helper_at = src.find("function buildUrl(")
+        rows_at = src.find("function buildRowsHtml(")
+        node_at = src.find("function updateRowNode(")
+        preview_at = src.find("function previewUrl(")
+        self.assertTrue(0 < helper_at < rows_at < node_at < preview_at)
+        helper = src[helper_at:rows_at]
+        updater = src[node_at:preview_at]
+        self.assertIn("function buildUrl(host,protocol,port)", helper)
+        self.assertIn('port==="443"||port==="8443"||port==="4443"', helper)
+        self.assertIn('(protocol==="http"&&port==="80")||(protocol==="https"&&port==="443")', helper)
+        self.assertIn("hasPort", helper)
+        self.assertNotIn("buildRowsHtml(", updater)
+        self.assertEqual(src.count("buildUrl(val,row.protocol,row.port)"), 3)
+        self.assertIn("else values=src.map(previewUrl)", src)
+        self.assertNotIn('"http://"+val', src)
+        self.assertNotIn('String(row.port)==="443"?"https":"http"', src)
+        self.assertNotIn("var allFields=", src)
+        self.assertEqual(src.count("8443"), 1)
+        self.assertEqual(src.count("4443"), 1)
+        self.assertIn("function buildUrl(", fofatoto.render_web_html())
+
 
 class PlaceholderKeyTest(unittest.TestCase):
     def test_example_and_default_keys_are_not_configured(self):

@@ -4,12 +4,15 @@
 
 ## Unreleased
 
+### 修复
+- Web 表格里的 host/url 链接，以及即时预览导出的 TXT，与命令行按同一套规则生成地址：协议取 `protocol`，端口 443、8443、4443 视为 https，默认的 `:80` 和 `:443` 不再写出，host 本身已带端口时不再重复追加。
+
 ### 文档
 - AGENTS.md 时间游标改为最多 10000 条窗口（目标超过 10000 时末批至少 1000 条），下一游标为该批最小 `lastupdatetime` 减 1 秒，并在本页短于请求条数或达到 fill/max 目标时停止。CI 段区分 GitHub Release 资源名与 Actions artifact id；手动触发只上传 artifact。`FofaWebHandler` 补上 `GET /api/export/download` 与 `POST /api/progress/cancel`。
 - README 批量查询：未指定 `-o` 时文件名前缀为 `fofa_batch`，不是 `fofa_results`。
 
 ### 其他
-- 删掉五条已被导入期校验或相邻用例覆盖的单元测试（全量 142）。`--icon` 与 `-w`/`-b` 互斥用例改为断言 stderr 含「不能同时使用」，避免 `-b` 因缺密钥或批量文件不存在而以 `sys.exit(1)` 误过。
+- 删掉五条已被导入期校验或相邻用例覆盖的单元测试（删除后 142；Web 链接用例加入后全量 143）。`--icon` 与 `-w`/`-b` 互斥用例改为断言 stderr 含「不能同时使用」，避免 `-b` 因缺密钥或批量文件不存在而以 `sys.exit(1)` 误过。
 - `.gitignore` 去掉无 Node 工程的 `node_modules/`，并忽略本地 Nuitka 输出目录 `dist/`。
 
 ## v1.8.0 - 2026-10-09
