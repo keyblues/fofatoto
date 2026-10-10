@@ -1672,15 +1672,6 @@ class FofaClient:
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[Callable[[], bool]] = None,
     ) -> SearchStats:
-        """
-        多次查询所有结果：使用 before 递进策略
-
-        策略：
-        1. 用 before 从最新时间往前查，每次最多 10000 条
-        2. 每批记录本批中最小的 lastupdatetime，作为下次查询的 before 值
-        3. 直到某批数据不足 10000 条或达到目标数量
-        4. 合并所有结果并去重
-        """
         if fields is None:
             fields = DEFAULT_FIELDS
         else:
@@ -1873,7 +1864,7 @@ class FofaClient:
                         dt -= timedelta(seconds=1)
                         before_time = dt.strftime("%Y-%m-%d %H:%M:%S")
                     except (ValueError, TypeError):
-                        before_time = None
+                        break
                 else:
                     break
 
@@ -2311,7 +2302,7 @@ def build_parser():
         "--fill",
         type=float,
         default=0.8,
-        help="多次查询完成百分比（0.0-1.0），仅 -l>10000 或 max 时生效",
+        help="多次查询完成百分比（(0, 1]），仅 -l>10000 或 max 时生效",
     )
     parser.add_argument(
         "-p",
