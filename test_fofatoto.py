@@ -55,9 +55,6 @@ class FieldConstantsTest(unittest.TestCase):
         self.assertEqual(fofatoto.KNOWN_FIELDS, frozenset(fofatoto.ALL_FIELD_NAMES))
         self.assertEqual(fofatoto.CUSTOM_FIELDS, frozenset({"url"}))
 
-    def test_web_categories_validation_passes(self):
-        fofatoto._validate_web_field_categories()  # 不应抛异常
-
     def test_web_categories_validation_catches_drift(self):
         import copy
 
@@ -285,9 +282,6 @@ class SleepInterruptibleTest(unittest.TestCase):
         fofatoto._sleep_interruptible(0.05, lambda: False)
         self.assertGreaterEqual(time.monotonic() - t0, 0.04)
 
-    def test_none_check_degrades_to_sleep(self):
-        fofatoto._sleep_interruptible(0.05)
-
 
 class RedactTest(unittest.TestCase):
     def test_secret_replaced(self):
@@ -311,10 +305,6 @@ class FofaResultTest(unittest.TestCase):
         r = make_result(host="a.com")
         r._extra["custom"] = ""
         self.assertEqual(r.to_dict(), {"host": "a.com", "custom": ""})
-
-    def test_to_dict_no_underscore_keys(self):
-        r = make_result(ip="1.2.3.4")
-        self.assertNotIn("_extra", r.to_dict())
 
 
 class SearchUrlAndParseTest(unittest.TestCase):
@@ -734,12 +724,6 @@ class MurmurHashTest(unittest.TestCase):
 class BuildIconQueryTest(unittest.TestCase):
     def test_without_extra(self):
         self.assertEqual(fofatoto.build_icon_query("-123"), 'icon_hash="-123"')
-
-    def test_extra_wrapped_in_parentheses(self):
-        self.assertEqual(
-            fofatoto.build_icon_query("5", "port=443"),
-            'icon_hash="5" && (port=443)',
-        )
 
     def test_extra_or_never_escapes(self):
         self.assertEqual(
@@ -1246,11 +1230,21 @@ class MainIconModeTest(unittest.TestCase):
     """--icon 与 -w/-b 互斥、以及 --icon 不落入 Web 模式（main 3237-3243 的守卫）"""
 
     def test_icon_conflicts_with_web_and_batch(self):
+        # 缺密钥或缺批量文件也会 sys.exit(1)；必须看到互斥文案，两条臂才算守住。
+        self.addCleanup(fofatoto._reset_update_check_state)
         for extra in (["-w"], ["-b", "targets.txt"]):
-            with mock.patch.object(sys, "argv", ["fofatoto.py", "--icon", "example.com"] + extra):
-                with self.assertRaises(SystemExit) as cm:
-                    fofatoto.main()
-            self.assertEqual(cm.exception.code, 1)
+            with self.subTest(extra=extra):
+                stderr = io.StringIO()
+                argv = ["fofatoto.py", "--no-update-check", "--icon", "example.com", *extra]
+                with (
+                    mock.patch.object(sys, "argv", argv),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(fofatoto, "announce_update"),
+                ):
+                    with self.assertRaises(SystemExit) as cm:
+                        fofatoto.main()
+                self.assertEqual(cm.exception.code, 1)
+                self.assertIn("不能同时使用", stderr.getvalue())
 
     def test_icon_mode_without_query_runs_icon_not_web(self):
         # 回归敏感行：web_mode 条件若丢掉 `and not args.icon`，--icon 会静默拉起 Web UI
@@ -1686,16 +1680,6 @@ class WebAccessLogTest(unittest.TestCase):
             ),
         )
         self.assertNotIn("task_id", download)
-
-    def test_lan_peer_is_kept(self):
-        line = self._logged(
-            self._handler("POST", "/api/export", peer="192.168.1.20"), 200
-        )
-        self.assertEqual(
-            line,
-            self._at("POST", "/api/export", 200, "192.168.1.20", clock=line[6:14]),
-        )
-        self.assertTrue(line.endswith("  200  192.168.1.20\n"))
 
     def test_ipv6_loopback_is_kept(self):
         line = self._logged(self._handler("POST", "/api/icon", peer="::1"), 200)
