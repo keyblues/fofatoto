@@ -378,6 +378,86 @@ class SearchRetryTest(unittest.TestCase):
         self.assertNotIn("SECRETKEY", str(ctx.exception))
 
 
+class SearchAllEfficientCursorTest(unittest.TestCase):
+    """坏的 lastupdatetime 必须停住；合法时间戳仍把 before 前移 1 秒。"""
+
+    @staticmethod
+    def _call(url: str) -> tuple[str, str]:
+        from urllib.parse import parse_qs, urlparse
+
+        params = parse_qs(urlparse(url).query)
+        query = base64.b64decode(params["qbase64"][0]).decode()
+        return query, params["size"][0]
+
+    def _run(self, stamp: str):
+        # 4 行满页、去重后只剩 2 条：低于目标，短页条件也不成立。
+        rows = [["a.example", stamp], ["b.example", stamp]] * 2
+        calls = []
+        served = False
+
+        def fake_urlopen(url, timeout=None):
+            nonlocal served
+            calls.append(url)
+            if self._call(url)[1] == "1":
+                return FakeResponse(
+                    {"error": False, "size": 4, "results": [rows[0]]}
+                )
+            if not served:
+                served = True
+                return FakeResponse({"error": False, "size": 4, "results": rows})
+            # 旧实现会反复请求同一窗口；空页让回归时能停下来。
+            return FakeResponse({"error": False, "size": 4, "results": []})
+
+        client = fofatoto.FofaClient("https://fofa.info", "k")
+        with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
+            stats = client.search_all_efficient(
+                'host="example.com"',
+                fields="host,lastupdatetime",
+                fill_percent=1.0,
+                api_rate_limit=0,
+            )
+        return [self._call(url) for url in calls], stats
+
+    def test_bad_lastupdatetime_does_not_rerequest_same_window(self):
+        calls, stats = self._run("not-a-time")
+        self.assertEqual(
+            calls,
+            [
+                ('host="example.com"', "1"),
+                ('host="example.com"', "4"),
+            ],
+        )
+        self.assertEqual(
+            sorted(r.host for r in stats.results), ["a.example", "b.example"]
+        )
+        self.assertFalse(stats.partial)
+
+    def test_valid_lastupdatetime_steps_cursor_back_one_second(self):
+        calls, stats = self._run("2020-06-07 08:09:10")
+        self.assertEqual(
+            calls,
+            [
+                ('host="example.com"', "1"),
+                ('host="example.com"', "4"),
+                (
+                    'host="example.com" && before="2020-06-07 08:09:09"',
+                    "2",
+                ),
+            ],
+        )
+        self.assertEqual(len(stats.results), 2)
+        self.assertFalse(stats.partial)
+
+
+class FillHelpTest(unittest.TestCase):
+    def test_fill_help_uses_open_closed_range(self):
+        action = next(
+            a for a in fofatoto.build_parser()._actions if "--fill" in a.option_strings
+        )
+        self.assertIn("(0, 1]", action.help)
+        self.assertNotIn("0.0-1.0", action.help)
+
+
 class ExportTaskTest(unittest.TestCase):
     def _add_task(self, **overrides):
         task = fofatoto.ExportTask(task_id=overrides.pop("task_id", "t1"), **overrides)
