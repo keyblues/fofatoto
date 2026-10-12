@@ -2962,8 +2962,7 @@ def _write_web_log(line: str) -> None:
 class FofaWebHandler(http.server.BaseHTTPRequestHandler):
     """FOFA Web UI 请求处理器"""
 
-    client: Optional[FofaClient] = None
-    config_manager: Optional[ConfigManager] = None
+    config_manager: ConfigManager
 
     def log_request(self, code="-", size="-"):
         target = _web_log_target(getattr(self, "path", "") or "/")
@@ -2999,13 +2998,10 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
     def _config_status(self) -> dict:
-        if self.config_manager:
-            return self.config_manager.public_status()
-        return {"configured": bool(self.client), "config_path": "", "config_template": ""}
+        return self.config_manager.public_status()
 
     def _safe_error(self, error) -> str:
-        key = self.config_manager.key if self.config_manager else ""
-        return _redact_sensitive(str(error), key)
+        return _redact_sensitive(str(error), self.config_manager.key)
 
     def _send_error(self, error, status: int = 200, data: Optional[dict] = None):
         payload = {"success": False, "error": self._safe_error(error)}
@@ -3014,14 +3010,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         self._send_json(payload, status)
 
     def _current_client(self) -> Optional[FofaClient]:
-        """获取当前有效的 client，支持配置热更新。
-
-        有 config_manager 时每次请求重新读取配置并按需重建 client；
-        无 config_manager（CLI 直接传 client）时回退到 self.client。
-        """
-        if self.config_manager:
-            return self.config_manager.get_client()
-        return self.client
+        return self.config_manager.get_client()
 
     def _require_client(self) -> bool:
         client = self._current_client()
@@ -3608,13 +3597,11 @@ class FofaWebServer:
 
     def __init__(
         self,
-        client: Optional[FofaClient],
-        config_manager: Optional[ConfigManager] = None,
+        config_manager: ConfigManager,
         port: int = 0,
         host: str = "127.0.0.1",
         auto_open: bool = True,
     ):
-        self.client = client
         self.config_manager = config_manager
         self.host = host
         self.auto_open = auto_open
@@ -3631,7 +3618,6 @@ class FofaWebServer:
         self.httpd = None
 
     def start(self):
-        FofaWebHandler.client = self.client
         FofaWebHandler.config_manager = self.config_manager
 
         # ThreadingHTTPServer 默认已启用 daemon_threads 与
@@ -3695,22 +3681,13 @@ def main():
 
     config_manager.load()
 
-    client = None
-    if not config_manager.is_valid():
-        if web_mode:
+    if web_mode:
+        if not config_manager.is_valid():
             print(f"[*] 配置文件: {config_manager.config_file}")
             print("[*] Web UI 将显示 API Key 配置引导")
-        else:
-            print("[!] 未找到有效的 FOFA API 凭证", file=sys.stderr)
-            print(f"[*] 配置文件: {config_manager.config_file}", file=sys.stderr)
-    else:
-        client = config_manager.get_client()
-
-    if web_mode:
         try:
             server = FofaWebServer(
-                client,
-                config_manager=config_manager,
+                config_manager,
                 port=args.port,
                 host=args.host or "127.0.0.1",
                 auto_open=args.host is None,
@@ -3720,6 +3697,13 @@ def main():
             sys.exit(1)
         server.start()
         return
+
+    client = None
+    if not config_manager.is_valid():
+        print("[!] 未找到有效的 FOFA API 凭证", file=sys.stderr)
+        print(f"[*] 配置文件: {config_manager.config_file}", file=sys.stderr)
+    else:
+        client = config_manager.get_client()
 
     if not config_file_ready or not client:
         if args.check:
