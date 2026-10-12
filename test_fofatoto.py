@@ -38,6 +38,12 @@ class FakeResponse:
     def read(self) -> bytes:
         return json.dumps(self._payload).encode()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
 
 class FieldConstantsTest(unittest.TestCase):
     """字段清单单一来源（ALL_FIELD_NAMES/KNOWN_FIELDS/CUSTOM_FIELDS）"""

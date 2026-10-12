@@ -1553,8 +1553,8 @@ class FofaClient:
             return self._get_usage_relay()
         api_url = f"{self.base_url}/api/v1/info/my?key={quote(self.key, safe='')}"
         try:
-            resp = urllib.request.urlopen(api_url, timeout=10)
-            data = json.loads(resp.read().decode())
+            with urllib.request.urlopen(api_url, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
             if data.get("error"):
                 raise FofaAPIError(f"获取用量失败: {data.get('errmsg', '未知错误')}")
             return data
@@ -1567,8 +1567,8 @@ class FofaClient:
     def _get_usage_relay(self) -> dict:
         """通过中转站自定义 API 获取账户信息并归一化为标准字段。"""
         try:
-            resp = urllib.request.urlopen(self.info_api, timeout=10)
-            data = json.loads(resp.read().decode())
+            with urllib.request.urlopen(self.info_api, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
         except Exception as e:
             err_msg = str(e).replace(self.key, "***") if self.key else str(e)
             raise FofaAPIError(f"获取用量失败: {err_msg}")
@@ -1613,8 +1613,8 @@ class FofaClient:
         data = None
         for attempt in range(1, max_retries + 1):
             try:
-                resp = urllib.request.urlopen(url, timeout=45)
-                data = json.loads(resp.read().decode())
+                with urllib.request.urlopen(url, timeout=45) as resp:
+                    data = json.loads(resp.read().decode())
             except Exception as e:
                 if attempt >= max_retries:
                     err_msg = str(e).replace(self.key, "***") if self.key else str(e)
