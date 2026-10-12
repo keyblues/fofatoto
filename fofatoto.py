@@ -1102,7 +1102,6 @@ class SearchStats:
     results: list = field(default_factory=list)
     total_quota_used: int = 0
     partial: bool = False
-    partial_error: str = ""
 
 
 class FofaAPIError(Exception):
@@ -1764,7 +1763,6 @@ class FofaClient:
         before_time = None
         batch_num = 0
         interrupted = False
-        partial_error = ""
 
         try:
             while True:
@@ -1801,7 +1799,6 @@ class FofaClient:
                             target_count=target_count,
                             total_estimated=total_estimated,
                         )
-                        partial_error = str(e)
                         break
                     raise
                 total_quota_used += len(slice_stats.results)
@@ -1871,7 +1868,6 @@ class FofaClient:
                 _sleep_interruptible(current_rate_limit, cancel_check)
         except KeyboardInterrupt:
             interrupted = True
-            partial_error = "Interrupted by user"
             trigger_cb("interrupted")
 
         if max_size > 0 and len(all_results) > max_size:
@@ -1886,7 +1882,6 @@ class FofaClient:
             target_count=target_count,
             unique_ips=len(unique_ips),
             total_quota_used=total_quota_used,
-            partial_error=partial_error,
         )
 
         return SearchStats(
@@ -1895,7 +1890,6 @@ class FofaClient:
             results=all_results,
             total_quota_used=total_quota_used,
             partial=interrupted,
-            partial_error=partial_error,
         )
 
 
@@ -2648,7 +2642,6 @@ class ExportTask:
     output_files: dict = field(default_factory=dict)
     error: str = ""
     partial: bool = False
-    partial_error: str = ""
     created_at: float = field(default_factory=time.time)
     finished_at: float = 0.0
     cancelled: bool = False
@@ -2727,7 +2720,6 @@ def _create_web_progress_callback(task_id: str):
                 task.progress = 0.99
                 if state.get("interrupted"):
                     task.partial = True
-                    task.partial_error = state.get("partial_error", "")
                     task.message = "部分结果已获取，正在生成导出文件"
                 else:
                     task.message = "正在生成导出文件"
@@ -3285,9 +3277,6 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                 "done",
                 progress=1.0,
                 partial=cancelled or stats.partial,
-                partial_error=(
-                    "已取消" if cancelled else stats.partial_error
-                ),
                 message=(
                     "已取消，已保留部分结果"
                     if cancelled
@@ -3343,7 +3332,6 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                     "current_target_count": task.current_target_count,
                     "failed_count": task.failed_count,
                     "partial": task.partial,
-                    "partial_error": task.partial_error,
                     "elapsed_seconds": max(0, int(time.time() - task.created_at)),
                     "error": task.error,
                 },
@@ -3529,7 +3517,6 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                     "done",
                     progress=1.0,
                     partial=True,
-                    partial_error="已取消",
                     message="已取消，已保留部分结果",
                     fetched=len(all_results),
                     output_files=output_files,
