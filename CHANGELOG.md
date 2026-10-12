@@ -14,11 +14,13 @@
 - AGENTS.md 时间游标改为最多 10000 条窗口（目标超过 10000 时末批至少 1000 条），下一游标为该批最小 `lastupdatetime` 减 1 秒，并在本页短于请求条数或达到 fill/max 目标时停止。CI 段区分 GitHub Release 资源名与 Actions artifact id；手动触发只上传 artifact。`FofaWebHandler` 补上 `GET /api/export/download` 与 `POST /api/progress/cancel`。
 - AGENTS.md 组件行号按删除 `partial_error` 后的代码刷新。
 - README 批量查询：未指定 `-o` 时文件名前缀为 `fofa_batch`，不是 `fofa_results`。
+- AGENTS.md 的 `FofaWebHandler`、`FofaWebServer` 与 `main()` 行号随 CLI client 注入删除更新。
 
 ### 其他
 - 去掉无人读取的 `partial_error`。`SearchStats` 与 `ExportTask` 不再保存该字段，`/api/progress` 也不再返回它。部分失败的原文仍在 `error_partial` 事件的 `error` 上，命令行照旧打印；界面仍按 `partial` 显示固定中文。
 - 删掉五条已被导入期校验或相邻用例覆盖的单元测试（删除后 142；Web 链接用例加入后全量 143）。`--icon` 与 `-w`/`-b` 互斥用例改为断言 stderr 含「不能同时使用」，避免 `-b` 因缺密钥或批量文件不存在而以 `sys.exit(1)` 误过。
 - `.gitignore` 去掉无 Node 工程的 `node_modules/`，并忽略本地 Nuitka 输出目录 `dist/`。
+- 去掉 Web 服务未使用的 CLI client 注入。`FofaWebServer` 只接收 `ConfigManager`，请求一律经 `get_client()` 取客户端；Web 模式启动时不再为这条路径提前创建 client。
 
 ## v1.8.0 - 2026-10-09
 
