@@ -217,6 +217,18 @@ class MergeDedupFieldsTest(unittest.TestCase):
     def test_no_dedup(self):
         self.assertEqual(fofatoto._merge_dedup_fields("ip", None), "ip")
 
+    def test_appends_missing_in_dedup_order(self):
+        # 两个及以上不在 -f 中的字段必须按 --dedup 顺序追加。
+        # set 差集只有一种遍历顺序，正反两种调用里至少一种会在用 set 时失败。
+        self.assertEqual(
+            fofatoto._merge_dedup_fields("ip,port", "ip,host,domain"),
+            "ip,port,host,domain",
+        )
+        self.assertEqual(
+            fofatoto._merge_dedup_fields("ip,port", "domain,host"),
+            "ip,port,domain,host",
+        )
+
 
 class ParseLimitTest(unittest.TestCase):
     def test_plain_number(self):

@@ -2097,16 +2097,10 @@ class Exporter:
 
 
 def _merge_dedup_fields(fields: str, dedup: Optional[str]) -> str:
-    """将去重字段中缺失的字段追加到查询字段列表"""
+    """将去重字段中缺失的字段按 --dedup 顺序追加到查询字段列表"""
     if not dedup:
         return fields
-    fields = fields or ""
-    dedup_fields = set(f.strip() for f in dedup.split(",") if f.strip())
-    user_fields = set(f.strip() for f in fields.split(",") if f.strip())
-    extra_fields = dedup_fields - user_fields
-    if extra_fields:
-        return (fields + "," if fields else "") + ",".join(extra_fields)
-    return fields
+    return _append_missing_fields(fields or "", _field_names(dedup))
 
 
 def parse_limit_value(limit: str) -> tuple[bool, int]:

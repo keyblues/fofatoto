@@ -5,6 +5,7 @@
 ## Unreleased
 
 ### 修复
+- `--dedup` 中不在 `-f` 里的字段按 `--dedup` 的顺序追加。这些字段会进入 FOFA 的 `fields` 参数和 CSV 表头；原先用集合收集，两个及以上缺失字段的顺序会随进程变化。例如 `-f ip,port --dedup ip,host,domain` 固定得到 `ip,port,host,domain`。
 - 深度导出遇到无法按 `%Y-%m-%d %H:%M:%S` 解析的 `lastupdatetime` 时停止翻页。原先解析失败会清空 `before` 游标并重试同一窗口：host 已经去重，满页又不会触发短页停止，循环不会结束。
 - Web 表格里的 host/url 链接，以及即时预览导出的 TXT，与命令行按同一套规则生成地址：协议取 `protocol`，端口 443、8443、4443 视为 https，默认的 `:80` 和 `:443` 不再写出，host 本身已带端口时不再重复追加。
 
