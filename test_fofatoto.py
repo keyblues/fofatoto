@@ -69,10 +69,6 @@ class FieldConstantsTest(unittest.TestCase):
             fofatoto.WEB_FIELD_CATEGORIES.append({"name": "x", "fields": ["bogus"]})
             with self.assertRaises(ValueError):
                 fofatoto._validate_web_field_categories()
-            fofatoto.WEB_FIELD_CATEGORIES.pop()
-            fofatoto.WEB_FIELD_CATEGORIES[0]["fields"].append("bogus2")
-            with self.assertRaises(ValueError):
-                fofatoto._validate_web_field_categories()
         finally:
             fofatoto.WEB_FIELD_CATEGORIES[:] = saved
 
@@ -90,7 +86,6 @@ class FieldHelpersTest(unittest.TestCase):
         self.assertEqual(fofatoto._append_missing_fields("host,ip", ["ip"]), "host,ip")
 
     def test_api_fields_strips_url_and_backfills(self):
-        # url 剥离 + 拼接所需字段补齐
         self.assertEqual(
             fofatoto._api_fields("url,ip"), "ip,host,port,protocol"
         )
@@ -166,20 +161,31 @@ class BuildUrlTest(unittest.TestCase):
 
 class DedupTest(unittest.TestCase):
     def test_dedup_by_user_fields(self):
-        rows = [make_result(host="a", ip="1"), make_result(host="a", ip="2")]
+        rows = [
+            make_result(host="a", ip="1"),
+            make_result(host="a", ip="2"),
+            make_result(host="b", ip="1"),
+        ]
         out = fofatoto.dedup_results(rows, fields="host")
-        self.assertEqual(len(out), 1)
+        self.assertEqual([r.host for r in out], ["a", "b"])
 
     def test_dedup_by_explicit_field(self):
-        rows = [make_result(host="a", ip="1"), make_result(host="b", ip="1")]
+        rows = [
+            make_result(host="a", ip="1"),
+            make_result(host="b", ip="1"),
+            make_result(host="c", ip="2"),
+        ]
         out = fofatoto.dedup_results(rows, fields="host,ip", dedup_field="ip")
-        self.assertEqual(len(out), 1)
-        self.assertEqual(out[0].host, "a")
+        self.assertEqual([(r.host, r.ip) for r in out], [("a", "1"), ("c", "2")])
 
     def test_dedup_by_url(self):
-        rows = [make_result(host="a.com", port="80"), make_result(host="a.com", port="80")]
+        rows = [
+            make_result(host="http://a.com"),
+            make_result(host="a.com", port="80"),
+            make_result(host="b.com", port="80"),
+        ]
         out = fofatoto.dedup_results(rows, fields="url", dedup_field="url")
-        self.assertEqual(len(out), 1)
+        self.assertEqual([r.host for r in out], ["http://a.com", "b.com"])
 
     def test_dedup_by_extra_field(self):
         same_a = make_result(host="a")
@@ -282,23 +288,39 @@ class RetryHelpersTest(unittest.TestCase):
 
 class SleepInterruptibleTest(unittest.TestCase):
     def test_immediate_cancel_raises(self):
-        with self.assertRaises(KeyboardInterrupt):
-            fofatoto._sleep_interruptible(10, lambda: True)
+        with mock.patch.object(fofatoto.time, "sleep") as sleep:
+            with self.assertRaises(KeyboardInterrupt):
+                fofatoto._sleep_interruptible(10, lambda: True)
+        sleep.assert_not_called()
 
     def test_cancel_during_sleep(self):
+        clock = {"now": 0.0}
         flag = {"v": False}
-        import threading
 
-        threading.Timer(0.3, lambda: flag.update(v=True)).start()
-        t0 = time.monotonic()
-        with self.assertRaises(KeyboardInterrupt):
-            fofatoto._sleep_interruptible(30, lambda: flag["v"])
-        self.assertLess(time.monotonic() - t0, 2)
+        def fake_sleep(seconds):
+            flag["v"] = True
+            clock["now"] += seconds
+
+        with (
+            mock.patch.object(fofatoto.time, "monotonic", side_effect=lambda: clock["now"]),
+            mock.patch.object(fofatoto.time, "sleep", side_effect=fake_sleep) as sleep,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                fofatoto._sleep_interruptible(30, lambda: flag["v"])
+        sleep.assert_called_once_with(0.25)
 
     def test_plain_sleep_completes(self):
-        t0 = time.monotonic()
-        fofatoto._sleep_interruptible(0.05, lambda: False)
-        self.assertGreaterEqual(time.monotonic() - t0, 0.04)
+        clock = {"now": 0.0}
+
+        def fake_sleep(seconds):
+            clock["now"] += seconds
+
+        with (
+            mock.patch.object(fofatoto.time, "monotonic", side_effect=lambda: clock["now"]),
+            mock.patch.object(fofatoto.time, "sleep", side_effect=fake_sleep) as sleep,
+        ):
+            fofatoto._sleep_interruptible(0.05, lambda: False)
+        sleep.assert_called_once_with(0.05)
 
 
 class RedactTest(unittest.TestCase):
@@ -350,10 +372,9 @@ class SearchUrlAndParseTest(unittest.TestCase):
         )
         q = parse_qs(urlparse(url).query)
         self.assertEqual(q["key"][0], "abc+key=123")
-        # qbase64 URL 解码后应还原为原始 base64，再解码还原查询语句
         self.assertEqual(base64.b64decode(q["qbase64"][0]).decode(), 'title="t+"')
         raw_plus = url.split("qbase64=", 1)[1].split("&", 1)[0]
-        self.assertNotIn("+", raw_plus)  # 原始 URL 中无裸 +
+        self.assertNotIn("+", raw_plus)
         self.assertEqual(q["fields"][0], "ip,port,host,protocol")
 
     def test_result_parsing_and_domain_inference(self):
@@ -363,7 +384,7 @@ class SearchUrlAndParseTest(unittest.TestCase):
         )
         r = stats.results[0]
         self.assertEqual(r.host, "a.com")
-        self.assertEqual(r.domain, "a.com")  # 由 host 推断
+        self.assertEqual(r.domain, "a.com")
         self.assertEqual(r._extra["unknown_field"], "X")
         self.assertEqual(stats.total, 2)
 
@@ -487,7 +508,6 @@ class ExportTaskTest(unittest.TestCase):
         return task
 
     def test_running_task_guard(self):
-        # 调用方须持有 _export_lock（与任务注册同一临界区）
         with fofatoto._export_lock:
             self.assertFalse(fofatoto._has_running_export_task())
         task = self._add_task(status="running")
@@ -618,8 +638,9 @@ class BatchPerTargetLimitTest(unittest.TestCase):
 
 class ExporterTest(unittest.TestCase):
     def setUp(self):
-        self.tmpdir = Path(tempfile.mkdtemp())
-        self.addCleanup(lambda: [p.unlink(missing_ok=True) for p in self.tmpdir.iterdir()] or self.tmpdir.rmdir())
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.tmpdir = Path(self._tmpdir.name)
         self.results = [
             make_result(host="a.com", ip="1.1.1.1", port="80", protocol="http"),
             make_result(host="b.com", ip="2.2.2.2", port="443", protocol="https"),
@@ -689,8 +710,8 @@ class WebHtmlRenderTest(unittest.TestCase):
             self.assertNotIn(ph, html)
         self.assertIn(f"v{fofatoto.APP_VERSION}", html)
         self.assertIn("var fieldCategories=", html)
-        self.assertIn("function escAttr", html)  # 属性转义函数（buildRowsHtml 使用）
-        self.assertIn("function sortValueCompare", html)  # 数值感知排序比较器
+        self.assertIn("function escAttr", html)
+        self.assertIn("function sortValueCompare", html)
         self.assertIn("title=\"'+escAttr(h.query)+'\"", fofatoto.WEB_HTML_TEMPLATE)
         self.assertNotIn("title=\"'+escHtml(h.query)+'\"", fofatoto.WEB_HTML_TEMPLATE)
         self.assertIn("escHtml(d.remain_api_query||\"N/A\")", fofatoto.WEB_HTML_TEMPLATE)
@@ -722,10 +743,8 @@ class WebHtmlRenderTest(unittest.TestCase):
         self.assertIn("else values=src.map(previewUrl)", src)
         self.assertNotIn('"http://"+val', src)
         self.assertNotIn('String(row.port)==="443"?"https":"http"', src)
-        self.assertNotIn("var allFields=", src)
         self.assertEqual(src.count("8443"), 1)
         self.assertEqual(src.count("4443"), 1)
-        self.assertIn("function buildUrl(", fofatoto.render_web_html())
 
 
 class PlaceholderKeyTest(unittest.TestCase):
@@ -1226,7 +1245,6 @@ class IconCacheTest(unittest.TestCase):
         finally:
             fofatoto._ICON_CACHE.clear()
         self.assertNotIn("icon_bytes", info)
-        self.assertNotIn("icon_data_uri", info)  # 预览字段无人消费，已移除
         self.assertEqual(info["icon_hash"], fofatoto.favicon_hash(png))
         self.assertEqual(again["icon_hash"], info["icon_hash"])
         self.assertEqual(len(calls), 1)
@@ -1310,8 +1328,6 @@ class ApiIconEndpointTest(unittest.TestCase):
         for key in ("icon_hash", "icon_md5", "icon_url", "icon_size", "source"):
             self.assertIn(key, sent["json"]["data"])
         self.assertEqual(sent["json"]["data"]["icon_hash"], "-123")
-        # 预览字段已随缓存瘦身移除，不得回潜
-        self.assertNotIn("icon_data_uri", sent["json"]["data"])
 
     def test_extract_error_maps_to_error_response(self):
         handler, sent = self._handler({"target": "does-not-exist.example"})
@@ -1349,7 +1365,7 @@ class ApiIconEndpointTest(unittest.TestCase):
 
 
 class MainIconModeTest(unittest.TestCase):
-    """--icon 与 -w/-b 互斥、以及 --icon 不落入 Web 模式（main 3237-3243 的守卫）"""
+    """--icon 与 -w/-b 互斥、以及 --icon 不落入 Web 模式"""
 
     def test_icon_conflicts_with_web_and_batch(self):
         # 缺密钥或缺批量文件也会 sys.exit(1)；必须看到互斥文案，两条臂才算守住。

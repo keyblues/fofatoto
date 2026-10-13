@@ -19,6 +19,7 @@
 - AGENTS.md 组件表补一行 CLI 路径符号：`build_parser`、`handle_single_mode`、`handle_batch_mode`、`handle_icon_mode`、`load_batch_targets`、`run_batch_search`、`export_results`。
 
 ### 其他
+- 单元测试收紧去重：相同 `build_url` 仍合并，不同键必须留下；可中断休眠改为 mock `time.sleep`；导出夹具改用 `TemporaryDirectory`。
 - 去掉无人读取的 `partial_error`。`SearchStats` 与 `ExportTask` 不再保存该字段，`/api/progress` 也不再返回它。部分失败的原文仍在 `error_partial` 事件的 `error` 上，命令行照旧打印；界面仍按 `partial` 显示固定中文。
 - 删掉五条已被导入期校验或相邻用例覆盖的单元测试。`--icon` 与 `-w`/`-b` 互斥用例改为断言 stderr 含「不能同时使用」，避免 `-b` 因缺密钥或批量文件不存在而以 `sys.exit(1)` 误过。
 - `.gitignore` 去掉无 Node 工程的 `node_modules/`，并忽略本地 Nuitka 输出目录 `dist/`。
