@@ -169,7 +169,7 @@ Web UI 提供三种模式：
 - 支持自定义占位符：
 
 ```bash
-./fofatoto "domain=\$TARGET" -b targets.txt -p '\$TARGET' -o results.csv
+./fofatoto 'domain=$TARGET' -b targets.txt -p '$TARGET' -o results.csv
 ```
 
 ### Icon 同款查询
@@ -245,7 +245,7 @@ TXT 模式根据查询字段自动决定输出内容：
 |----------|----------|
 | `-f ip` | IP 地址列表 |
 | `-f domain` | 域名列表 |
-| 其他 | URL 列表（自动补全协议和端口） |
+| 其他 | URL 列表（`build_url` 用 `protocol` 填协议；`protocol` 为空时，443、8443、4443 视为 https，其余为 http；省略默认的 `:80` 和 `:443`，与 Web 链接同一规则） |
 
 ```bash
 ./fofatoto "domain=baidu.com" -f ip -txt -o ips.txt
