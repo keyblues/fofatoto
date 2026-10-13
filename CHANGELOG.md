@@ -10,6 +10,7 @@
 - Web 表格里的 host/url 链接，以及即时预览导出的 TXT，与命令行按同一套规则生成地址：协议取 `protocol`，端口 443、8443、4443 视为 https，默认的 `:80` 和 `:443` 不再写出，host 本身已带端口时不再重复追加。
 
 ### 文档
+- AGENTS.md：`get_client()` 改为每次 `load()` 后新建 client，不再按签名缓存。组件行号按本次删除后的代码刷新。
 - AGENTS.md 的 Web 模式条件补上无 `-c`/`--check`：单独执行 `-c` 只做账户检测，不会拉起 Web UI。
 - `--fill` 的命令行帮助改为 `(0, 1]`，与参数校验和 README 一致。删掉 `search_all_efficient` 里已过时的分步说明。AGENTS.md 的停止条件补上「本批没有可解析的 `lastupdatetime`」。
 - AGENTS.md 时间游标改为最多 10000 条窗口（目标超过 10000 时末批至少 1000 条），下一游标为该批最小 `lastupdatetime` 减 1 秒，并在本页短于请求条数或达到 fill/max 目标时停止。CI 段区分 GitHub Release 资源名与 Actions artifact id；手动触发只上传 artifact。`FofaWebHandler` 补上 `GET /api/export/download` 与 `POST /api/progress/cancel`。
@@ -19,6 +20,7 @@
 - AGENTS.md 组件表补一行 CLI 路径符号：`build_parser`、`handle_single_mode`、`handle_batch_mode`、`handle_icon_mode`、`load_batch_targets`、`run_batch_search`、`export_results`。
 
 ### 其他
+- 去掉只写不读、或写出后立刻被覆盖的状态：`Exporter.fields_str`；icon 结果里的 `target` / `content_type` 以及只为填它们的返回位（`_guess_content_type` / `_looks_like_icon` 仍用来判断是不是图标）；中转用量里写死的 `vip_level`；`ConfigManager.last_error` 和 `public_status()` 的 `error`；批量查询未使用的行号（改为 `list[str]`）；`export_results` 在调用方已默认 CSV 时走不到的空格式分支；Web 进度回调里被紧接着的 `done` 盖掉的 `error_partial` / `interrupted`（命令行仍打印这两类事件）；按签名缓存的无状态 `FofaClient`。`/api/search` 改为使用门槛刚加载的 client，同一次请求不再读第二遍配置。导出和批量任务线程里的 `get_client()` 仍留在 try 中。
 - 单元测试收紧去重：相同 `build_url` 仍合并，不同键必须留下；可中断休眠改为 mock `time.sleep`；导出夹具改用 `TemporaryDirectory`。
 - 去掉无人读取的 `partial_error`。`SearchStats` 与 `ExportTask` 不再保存该字段，`/api/progress` 也不再返回它。部分失败的原文仍在 `error_partial` 事件的 `error` 上，命令行照旧打印；界面仍按 `partial` 显示固定中文。
 - 删掉五条已被导入期校验或相邻用例覆盖的单元测试。`--icon` 与 `-w`/`-b` 互斥用例改为断言 stderr 含「不能同时使用」，避免 `-b` 因缺密钥或批量文件不存在而以 `sys.exit(1)` 误过。

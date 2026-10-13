@@ -253,7 +253,7 @@ class ParseLimitTest(unittest.TestCase):
 class PlaceholderTest(unittest.TestCase):
     def test_expand_placeholder_query(self):
         out = fofatoto.expand_placeholder_query("host={}", ["a.com", "b.com"], "{}")
-        self.assertEqual(out, [("host=a.com", 1), ("host=b.com", 2)])
+        self.assertEqual(out, ["host=a.com", "host=b.com"])
 
     def test_load_batch_targets(self):
         with tempfile.NamedTemporaryFile(
@@ -263,7 +263,7 @@ class PlaceholderTest(unittest.TestCase):
             path = Path(f.name)
         try:
             targets = fofatoto.load_batch_targets(path)
-            self.assertEqual(targets, [("a.com", 3), ("b.com", 4)])
+            self.assertEqual(targets, ["a.com", "b.com"])
         finally:
             path.unlink(missing_ok=True)
 
@@ -596,7 +596,7 @@ class BatchPerTargetLimitTest(unittest.TestCase):
         ):
             handler._run_batch_task(
                 task_id,
-                [("host=a.com", 1), ("host=b.com", 2)],
+                ["host=a.com", "host=b.com"],
                 "ip,port",
                 0.8,
                 max_size,

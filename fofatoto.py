@@ -554,9 +554,6 @@ class ConfigManager:
         self.config_file = self.config_dir / "config.json"
         self.url = ""
         self.key = ""
-        self.last_error = ""
-        self._client = None
-        self._client_signature = None
 
     def _get_config_dir(self) -> Path:
         """获取配置目录。
@@ -589,7 +586,6 @@ class ConfigManager:
             print("[*] 请编辑配置文件填入你的 FOFA API Key 后重试")
             return False
         except Exception as e:
-            self.last_error = str(e)
             print(f"[!] 创建配置文件失败: {e}", file=sys.stderr)
             return False
 
@@ -600,7 +596,6 @@ class ConfigManager:
                 self.url = data.get("url", "")
                 self.key = data.get("key", "")
             except Exception as e:
-                self.last_error = str(e)
                 print(f"[警告] 读取 config.json 失败: {e}", file=sys.stderr)
         return self
 
@@ -625,26 +620,19 @@ class ConfigManager:
             "config_template": json.dumps(
                 DEFAULT_CONFIG, ensure_ascii=False, indent=4
             ),
-            "error": self.last_error,
         }
 
     def get_client(self) -> Optional[FofaClient]:
-        """按需重新读取配置并返回有效 client；配置未变化时复用缓存。
+        """重新读取配置并返回有效 client。
 
         用于 Web UI 热更新：用户修改 config.json 后无需重启服务，
-        下次请求会检测到配置变化并重建 FofaClient。
+        下次请求经 load() 读到最新配置。
         """
         self.load()
         if not self.is_valid():
-            self._client = None
-            self._client_signature = None
             return None
         info_api = _detect_relay_info_api(self.url, self.key)
-        signature = (self.url, self.key, info_api)
-        if self._client is None or self._client_signature != signature:
-            self._client = FofaClient(self.url, self.key, info_api=info_api)
-            self._client_signature = signature
-        return self._client
+        return FofaClient(self.url, self.key, info_api=info_api)
 
 
 # ============ 更新检查 ============
@@ -1403,17 +1391,17 @@ def _fetch_url(url: str, max_bytes: int, accept: str = "*/*") -> tuple[bytes, st
         raise IconExtractError(f"抓取失败: {e}: {url}")
 
 
-def _resolve_icon_from_url(url: str) -> tuple[bytes, str, str]:
+def _resolve_icon_from_url(url: str) -> tuple[bytes, str]:
     """抓取网页解析 icon 标签；目标本身是图片时直接作为 icon。
 
-    返回 (icon_bytes, icon 来源 URL, content_type)。
+    返回 (icon_bytes, icon 来源 URL)。
     """
     # 直接图片目标按图标上限（5MB）抓取；未识别为图片时再单独施加 HTML 上限（2MB）
     data, final_url, ctype = _fetch_url(
         url, _MAX_ICON_BYTES, accept="text/html,application/xhtml+xml,image/*;q=0.8,*/*;q=0.5"
     )
     if _looks_like_icon(data, ctype):
-        return data, final_url, ctype or _guess_content_type(data)
+        return data, final_url
     if len(data) > _MAX_HTML_BYTES:
         raise IconExtractError(
             f"HTML 响应超过大小上限 {_MAX_HTML_BYTES // (1024 * 1024)}MB: {url}"
@@ -1439,12 +1427,12 @@ def _resolve_icon_from_url(url: str) -> tuple[bytes, str, str]:
             if href.lower().startswith("data:"):
                 # 格式错误在此抛 IconExtractError 并由下方 except 记入 last_error
                 raw = _decode_data_uri(href)
-                return raw, "(data: URI)", _guess_content_type(raw)
+                return raw, "(data: URI)"
             icon_url = urljoin(final_url, href)
-            raw, icon_final, icon_ctype = _fetch_url(icon_url, _MAX_ICON_BYTES, accept="image/*,*/*;q=0.8")
+            raw, icon_final, _ = _fetch_url(icon_url, _MAX_ICON_BYTES, accept="image/*,*/*;q=0.8")
             if not raw:
                 raise IconExtractError(f"图标响应为空: {icon_url}")
-            return raw, icon_final, icon_ctype or _guess_content_type(raw)
+            return raw, icon_final
         except Exception as e:
             last_error = e
             continue
@@ -1467,21 +1455,19 @@ def resolve_icon(target: str, allow_file: bool = True) -> dict:
     if not target:
         raise IconExtractError("目标为空")
 
-    def _result(icon_bytes: bytes, icon_url: str, ctype: str, source: str, icon_hash: str = "") -> dict:
+    def _result(icon_bytes: bytes, icon_url: str, source: str, icon_hash: str = "") -> dict:
         icon_hash = icon_hash or favicon_hash(icon_bytes)
         return {
-            "target": target,
             "source": source,
             "icon_hash": icon_hash,
             "icon_md5": hashlib.md5(icon_bytes, usedforsecurity=False).hexdigest() if icon_bytes else "",
             "icon_url": icon_url,
             "icon_size": len(icon_bytes),
-            "content_type": ctype,
             "icon_bytes": icon_bytes,
         }
 
     if _ICON_HASH_RE.match(target):
-        return _result(b"", "", "", "hash", icon_hash=target)
+        return _result(b"", "", "hash", icon_hash=target)
 
     if allow_file:
         path = Path(target)
@@ -1496,7 +1482,7 @@ def resolve_icon(target: str, allow_file: bool = True) -> dict:
                 raise IconExtractError(f"icon 文件为空: {path}")
             if len(raw) > _MAX_ICON_BYTES:
                 raise IconExtractError(f"icon 文件超过大小上限 {_MAX_ICON_BYTES // (1024 * 1024)}MB")
-            return _result(raw, str(path), _guess_content_type(raw), "file")
+            return _result(raw, str(path), "file")
 
     if re.match(r"^https?://", target, re.I):
         attempts = [target]
@@ -1508,8 +1494,8 @@ def resolve_icon(target: str, allow_file: bool = True) -> dict:
     errors = []
     for url in attempts:
         try:
-            raw, icon_url, ctype = _resolve_icon_from_url(url)
-            return _result(raw, icon_url, ctype, "url")
+            raw, icon_url = _resolve_icon_from_url(url)
+            return _result(raw, icon_url, "url")
         except IconExtractError as e:
             errors.append(str(e))
         except Exception as e:
@@ -1573,7 +1559,6 @@ class FofaClient:
             raise FofaAPIError(f"获取用量失败: {err_msg}")
         return {
             "isvip": bool(data.get("valid", False)),
-            "vip_level": "中转",
             "remain_api_query": data.get("totalRemaining", "N/A"),
             "expiration": data.get("expireTime", "N/A"),
             "today_remaining": data.get("todayRemaining"),
@@ -1993,7 +1978,6 @@ class Exporter:
         else:
             self.results = dedup_results(results, fields, dedup_field)
 
-        self.fields_str = fields
         if fields:
             self.requested_fields = [f.strip() for f in fields.split(",") if f.strip()]
         else:
@@ -2405,12 +2389,10 @@ def handle_batch_mode(client: FofaClient, args):
         placeholder = args.placeholder
 
         if args.query and placeholder in args.query:
-            queries = expand_placeholder_query(
-                args.query, [t[0] for t in targets], placeholder
-            )
+            queries = expand_placeholder_query(args.query, targets, placeholder)
             print(f"[*] 批量模式: 已加载 {len(queries)} 个查询 (占位符: {placeholder})")
         else:
-            queries = [(t[0], t[1]) for t in targets]
+            queries = targets
             print(f"[*] 批量模式: 已加载 {len(queries)} 个查询")
 
         if not any([args.csv, args.txt, args.json]):
@@ -2699,17 +2681,10 @@ def _create_web_progress_callback(task_id: str):
                     f"{label} 请求失败，正在重试 {attempt}/{max_attempts - 1}；"
                     f"后续间隔 {rate_limit:.1f}s"
                 )
-            elif event == "error_partial":
-                task.message = f"请求失败，保留已获取 {state.get('fetched', 0)} 条结果"
-                task.fetched = state.get("fetched", task.fetched)
-                task.total_estimated = state.get("total_estimated", task.total_estimated)
-                task.target_count = state.get("target_count", task.target_count)
             elif event == "target_reached":
                 task.progress = 0.99
                 task.fetched = state.get("fetched", 0)
                 task.message = "已达到目标数量，正在整理文件"
-            elif event == "interrupted":
-                task.message = "部分结果已获取，正在生成导出文件"
             elif event == "done":
                 task.progress = 0.99
                 if state.get("interrupted"):
@@ -2757,14 +2732,6 @@ def _create_web_batch_progress_callback(
                 task.message = (
                     f"目标 {batch_idx + 1}/{total_queries} 请求失败，正在重试 "
                     f"{attempt}/{max_attempts - 1}；后续间隔 {rate_limit:.1f}s"
-                )
-            elif event == "error_partial":
-                task.current_fetched = state.get("fetched", task.current_fetched)
-                task.current_total_estimated = state.get(
-                    "total_estimated", task.current_total_estimated
-                )
-                task.current_target_count = state.get(
-                    "target_count", task.current_target_count
                 )
             elif event == "done":
                 task.current_fetched = state.get("fetched", task.current_fetched)
@@ -3006,14 +2973,14 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
     def _current_client(self) -> Optional[FofaClient]:
         return self.config_manager.get_client()
 
-    def _require_client(self) -> bool:
+    def _require_client(self) -> Optional[FofaClient]:
         client = self._current_client()
         if client:
-            return True
+            return client
         data = self._config_status()
         data["configured"] = False
         self._send_error("未配置有效的 FOFA API Key", data=data)
-        return False
+        return None
 
     def _send_html(self, html: str, status: int = 200):
         self.send_response(status)
@@ -3100,7 +3067,8 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
 
     def _handle_search(self):
         try:
-            if not self._require_client():
+            client = self._require_client()
+            if not client:
                 return
             body = self._read_body()
             query = body.get("query", "")
@@ -3116,7 +3084,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             fields = body.get("fields") or DEFAULT_FIELDS
             full = bool(body.get("full", False))
 
-            stats = self._current_client().search(query, size=size, fields=fields, full=full)
+            stats = client.search(query, size=size, fields=fields, full=full)
 
             columns = [f.strip() for f in fields.split(",") if f.strip()]
             has_url = "url" in columns
@@ -3417,7 +3385,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             failed_count = 0
             cancel_check = _make_task_cancel_check(task_id)
 
-            for batch_idx, (query, _) in enumerate(queries):
+            for batch_idx, query in enumerate(queries):
                 base_count = len(all_results)
                 with _export_lock:
                     task = _export_tasks.get(task_id)
@@ -3730,26 +3698,20 @@ def main():
 
 def expand_placeholder_query(
     base_query: str, targets: list[str], placeholder: str
-) -> list[tuple[str, int]]:
-    results = []
-    for idx, target in enumerate(targets, 1):
-        query = base_query.replace(placeholder, target)
-        results.append((query, idx))
-    return results
+) -> list[str]:
+    return [base_query.replace(placeholder, target) for target in targets]
 
 
-def load_batch_targets(file_path: Path) -> list[tuple[str, int]]:
+def load_batch_targets(file_path: Path) -> list[str]:
     if not file_path.exists():
         raise FileNotFoundError(f"批量目标文件不存在: {file_path}")
 
     targets = []
-    for line_no, line in enumerate(
-        file_path.read_text(encoding="utf-8").splitlines(), 1
-    ):
+    for line in file_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        targets.append((line, line_no))
+        targets.append(line)
 
     if not targets:
         raise ValueError("批量目标文件中没有有效的目标值")
@@ -3758,7 +3720,7 @@ def load_batch_targets(file_path: Path) -> list[tuple[str, int]]:
 
 
 def run_batch_search(
-    client: FofaClient, queries: list[tuple[str, int]], args
+    client: FofaClient, queries: list[str], args
 ) -> list[FofaResult]:
     all_results = []
     total_queries = len(queries)
@@ -3766,7 +3728,7 @@ def run_batch_search(
     query_fields = _merge_dedup_fields(args.fields, args.dedup)
     use_deep = limit_value > 10000 or is_max
 
-    for idx, (query, line_no) in enumerate(queries, 1):
+    for idx, query in enumerate(queries, 1):
         query = query.strip()
         if not query:
             continue
@@ -3806,7 +3768,6 @@ def run_batch_search(
 def export_results(results, args):
     """导出结果"""
     output_path = Path(args.output)
-    exported = 0
 
     formats = []
     if args.csv:
@@ -3834,22 +3795,16 @@ def export_results(results, args):
         csv_path = resolve_output_path(".csv")
         count = exporter.export_csv(csv_path)
         print(f"[+] 已导出 CSV: {csv_path} ({count} 条)")
-        exported += 1
 
     if args.txt:
         txt_path = resolve_output_path(".txt")
         count = exporter.export_txt(txt_path)
         print(f"[+] 已导出 TXT: {txt_path} ({count} 条)")
-        exported += 1
 
     if args.json:
         json_path = resolve_output_path(".json")
         count = exporter.export_json(json_path)
         print(f"[+] 已导出 JSON: {json_path} ({count} 条)")
-        exported += 1
-
-    if exported == 0:
-        print("[-] 没有导出任何文件（请指定输出格式）")
 
 
 if __name__ == "__main__":
