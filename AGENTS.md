@@ -11,7 +11,7 @@ Guidance for agents working in this repository.
 ## Commands
 
 ```bash
-# Syntax check + unit tests (stdlib unittest, 146 tests, no network calls)
+# Syntax check + unit tests (stdlib unittest, 147 tests, no network calls)
 python -m py_compile fofatoto.py
 python -m unittest test_fofatoto -v
 
@@ -21,7 +21,7 @@ python fofatoto.py "domain=baidu.com" -l 10
 # Run Web UI (auto-opens browser unless --host given; default listen 127.0.0.1, probes port from 17380)
 python fofatoto.py -w
 
-# Build binary (requires: pip install nuitka zstandard; Linux also needs patchelf + python3-dev)
+# Build binary (nuitka + zstandard: venv, or pip install --break-system-packages on externally managed Python; Linux also needs gcc, python3-dev, patchelf)
 # Linux / macOS. Windows omits --static-libpython=yes. Same flags as CI.
 python -m nuitka --onefile --lto=yes --static-libpython=yes --remove-output \
   --assume-yes-for-downloads --python-flag=no_site,no_docstrings \
