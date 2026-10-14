@@ -375,17 +375,26 @@ Web UI 由 `http.server` 提供：仅监听本机（默认 `127.0.0.1`，可用 
 
 ## 构建指南
 
-从源码构建需要先安装 Nuitka 和系统依赖：
+从源码构建需要先安装 Nuitka 和系统依赖。
+
+Debian、Ubuntu 等发行版把系统 Python 标成外部管理（PEP 668），直接 `pip install` 会被拒绝。安装 nuitka 和 zstandard 时使用虚拟环境，或加上 `--break-system-packages`：
 
 ```bash
-# 安装依赖
-pip install nuitka zstandard
+python3 -m venv .venv
+.venv/bin/pip install nuitka zstandard
 
-# Linux 需要
-apt install python3-dev patchelf
+# 或者装进当前系统 Python
+pip install --break-system-packages nuitka zstandard
+
+# Linux 还需要 C 编译器、Python 头文件和 patchelf
+apt install gcc python3-dev patchelf
 ```
 
+没有这项限制时（例如 Windows，或当前已经在虚拟环境里），仍用 `pip install nuitka zstandard`。
+
 ### 编译命令
+
+调用的解释器必须是装有 Nuitka 的那个。使用上面的虚拟环境时，Linux / macOS 把 `python3` 换成 `.venv/bin/python`，Windows 把 `python` 换成 `.venv\Scripts\python`。
 
 ```bash
 # Linux / macOS

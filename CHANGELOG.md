@@ -19,6 +19,8 @@
 - README TXT 导出「其他」补上 `build_url`：用 `protocol` 填协议，`protocol` 为空时 443、8443、4443 视为 https（其余为 http），并省略默认的 `:80` 和 `:443`，与 Web 链接同一规则。
 - AGENTS.md 组件表补一行 CLI 路径符号：`build_parser`、`handle_single_mode`、`handle_batch_mode`、`handle_icon_mode`、`load_batch_targets`、`run_batch_search`、`export_results`。
 - AGENTS.md：`FofaWebHandler` 及之后的组件行号按删掉终态 `message` 后的代码刷新。
+- README 本地 Nuitka 构建准备：Linux 依赖在已有的 `python3-dev`、`patchelf` 上补 `gcc`。受 PEP 668 约束的系统 Python 安装 nuitka 与 zstandard 时，使用虚拟环境或 `pip install --break-system-packages`。CI 容器里多出来的 `g++`、`make`、`wget`、`zstd` 不写入 README。
+- AGENTS.md 测试计数由 146 更正为 147，与当前 `test_fofatoto` 套件一致；构建依赖说明与 README 的本地编译准备对齐。
 
 ### 其他
 - 深度导出与批量任务结束时不再把终态文案写入 `message`。面板在 `done` / `error` 后自行生成文字（按 `partial`/`fetched`，或改用 `error`），进行中的 `task.message` 仍会显示。
