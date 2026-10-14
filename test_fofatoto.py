@@ -679,10 +679,10 @@ class ExporterTest(unittest.TestCase):
 
     def test_export_txt_domain_mode(self):
         out = self.tmpdir / "x.txt"
-        r = make_result(host="x.com", domain="x.com")
+        r = make_result(host="cdn.example", domain="example.com")
         n = fofatoto.Exporter([r], fields="domain").export_txt(out)
         self.assertEqual(n, 1)
-        self.assertEqual(out.read_text(encoding="utf-8"), "x.com\n")
+        self.assertEqual(out.read_text(encoding="utf-8"), "example.com\n")
 
     def test_export_txt_url_mode(self):
         out = self.tmpdir / "x.txt"
@@ -1685,18 +1685,26 @@ class UpdateCheckTest(unittest.TestCase):
         self.assertNotIn("__GITHUB_URL__", html)
 
     def test_no_update_check_flag_suppresses_before_web(self):
+        # 抑制标志必须在 FofaWebServer.start 被调用时已经置位。Web 模式的
+        # main() 不调用 announce_update，mock 掉服务器后看不到这次检查。
+        seen = {}
+
+        def on_start():
+            seen["forced_off"] = fofatoto._update_check_forced_off
+
         with (
+            mock.patch.dict(os.environ, {"FOFATOTO_NO_UPDATE_CHECK": ""}),
             mock.patch.object(sys, "argv", ["fofatoto.py", "--no-update-check"]),
             mock.patch.object(fofatoto, "ConfigManager") as cm_cls,
             mock.patch.object(fofatoto, "FofaWebServer") as server,
-            mock.patch.object(fofatoto, "announce_update") as announce,
+            mock.patch.object(fofatoto, "fetch_latest_release"),
         ):
             cm_cls.return_value.ensure_exists.return_value = True
             cm_cls.return_value.is_valid.return_value = False
+            server.return_value.start.side_effect = on_start
             fofatoto.main()
-        self.assertTrue(fofatoto.update_check_disabled())
         server.return_value.start.assert_called_once()
-        announce.assert_not_called()
+        self.assertIs(seen["forced_off"], True)
 
 
 def _plain_log(text: str) -> str:

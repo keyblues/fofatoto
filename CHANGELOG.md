@@ -26,6 +26,7 @@
 - 删掉五条已被导入期校验或相邻用例覆盖的单元测试。`--icon` 与 `-w`/`-b` 互斥用例改为断言 stderr 含「不能同时使用」，避免 `-b` 因缺密钥或批量文件不存在而以 `sys.exit(1)` 误过。
 - `.gitignore` 去掉无 Node 工程的 `node_modules/`，并忽略本地 Nuitka 输出目录 `dist/`。
 - 去掉 Web 服务未使用的 CLI client 注入。`FofaWebServer` 只接收 `ConfigManager`，请求一律经 `get_client()` 取客户端；Web 模式启动时不再为这条路径提前创建 client。
+- 单元测试：TXT 的 domain 模式让 host 与 domain 取不同值，写成 host 不能再通过；`--no-update-check` 在 `FofaWebServer.start` 的副作用里断言抑制标志，避免 mock 掉服务器后用「没调用 `announce_update`」或事后读 `update_check_disabled()` 误过。
 
 ## v1.8.0 - 2026-10-09
 
