@@ -3228,15 +3228,6 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                 "done",
                 progress=1.0,
                 partial=cancelled or stats.partial,
-                message=(
-                    "已取消，已保留部分结果"
-                    if cancelled
-                    else (
-                        "部分导出完成，已保留可用结果"
-                        if stats.partial
-                        else "导出文件已生成"
-                    )
-                ),
                 fetched=len(stats.results),
                 total_estimated=stats.total,
                 total_quota_used=stats.total_quota_used,
@@ -3441,18 +3432,13 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
 
             output_files = _write_web_exports("fofa_batch", all_results, fields)
 
-            done_fields = {"failed_count": failed_count}
-            if failed_count:
-                done_fields["message"] = (
-                    f"部分导出完成，{failed_count}/{total_queries} 个目标失败"
-                )
             _finish_export_task(
                 task_id,
                 "done",
                 progress=1.0,
                 fetched=len(all_results),
                 output_files=output_files,
-                **done_fields,
+                failed_count=failed_count,
             )
         except KeyboardInterrupt:
             with _export_lock:
@@ -3468,7 +3454,6 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                     "done",
                     progress=1.0,
                     partial=True,
-                    message="已取消，已保留部分结果",
                     fetched=len(all_results),
                     output_files=output_files,
                 )
