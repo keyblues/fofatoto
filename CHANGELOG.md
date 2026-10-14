@@ -18,8 +18,10 @@
 - README 批量示例的查询和 `-p` 都写成字面占位符（单引号）。原先查询用双引号、`-p` 用单引号，shell 会把查询里的 `\$` 变成 `$`，却把反斜杠留给占位符，`handle_batch_mode` 只在 `placeholder in args.query` 时替换，示例实际不会替换。
 - README TXT 导出「其他」补上 `build_url`：用 `protocol` 填协议，`protocol` 为空时 443、8443、4443 视为 https（其余为 http），并省略默认的 `:80` 和 `:443`，与 Web 链接同一规则。
 - AGENTS.md 组件表补一行 CLI 路径符号：`build_parser`、`handle_single_mode`、`handle_batch_mode`、`handle_icon_mode`、`load_batch_targets`、`run_batch_search`、`export_results`。
+- AGENTS.md：`FofaWebHandler` 及之后的组件行号按删掉终态 `message` 后的代码刷新。
 
 ### 其他
+- 深度导出与批量任务结束时不再把终态文案写入 `message`。面板在 `done` / `error` 后自行生成文字（按 `partial`/`fetched`，或改用 `error`），进行中的 `task.message` 仍会显示。
 - 去掉只写不读、或写出后立刻被覆盖的状态：`Exporter.fields_str`；icon 结果里的 `target` / `content_type` 以及只为填它们的返回位（`_guess_content_type` / `_looks_like_icon` 仍用来判断是不是图标）；中转用量里写死的 `vip_level`；`ConfigManager.last_error` 和 `public_status()` 的 `error`；批量查询未使用的行号（改为 `list[str]`）；`export_results` 在调用方已默认 CSV 时走不到的空格式分支；Web 进度回调里被紧接着的 `done` 盖掉的 `error_partial` / `interrupted`（命令行仍打印这两类事件）；按签名缓存的无状态 `FofaClient`。`/api/search` 改为使用门槛刚加载的 client，同一次请求不再读第二遍配置。导出和批量任务线程里的 `get_client()` 仍留在 try 中。
 - 单元测试收紧去重：相同 `build_url` 仍合并，不同键必须留下；可中断休眠改为 mock `time.sleep`；导出夹具改用 `TemporaryDirectory`。
 - 去掉无人读取的 `partial_error`。`SearchStats` 与 `ExportTask` 不再保存该字段，`/api/progress` 也不再返回它。部分失败的原文仍在 `error_partial` 事件的 `error` 上，命令行照旧打印；界面仍按 `partial` 显示固定中文。
