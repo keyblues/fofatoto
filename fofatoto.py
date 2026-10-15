@@ -8,8 +8,10 @@ from __future__ import annotations
 import argparse
 import base64
 import csv
+import errno
 import hashlib
 import hmac
+import http.client
 import http.cookies
 import http.server
 import ipaddress
@@ -1378,41 +1380,342 @@ def _looks_like_icon(data: bytes, ctype: str) -> bool:
     return _guess_content_type(data) == "image/svg+xml"
 
 
-def _fetch_url(url: str, max_bytes: int, accept: str = "*/*") -> tuple[bytes, str, str]:
-    """下载 URL 内容，返回 (bytes, 最终 URL, content_type)。仅允许 http/https。"""
-    if urlparse(url).scheme.lower() not in ("http", "https"):
-        raise IconExtractError(f"仅支持 http/https: {url}")
-    req = urllib.request.Request(
-        url,
-        headers={"User-Agent": _BROWSER_UA, "Accept": accept, "Accept-Language": "zh-CN,zh;q=0.9"},
-    )
+# 调用方看到的抓取失败文案。超时、拒绝、HTTP 状态和被拦截的内网地址用同一句，
+# 避免拿错误差异做端口探测，也不回显跳转后的地址。
+_ICON_FETCH_FAIL = "图标抓取失败"
+_ICON_MAX_REDIRECTS = 10
+_ICON_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+# 6to4 / Teredo / NAT64 可以把流量送到任意 IPv4（含元数据地址）。整段拒绝，
+# 不依赖某一版 ipaddress 是否把这些前缀标成 private。
+_ICON_NAT64_PREFIXES = (
+    ipaddress.IPv6Network("64:ff9b::/96"),
+    ipaddress.IPv6Network("64:ff9b:1::/48"),
+)
+# 单元测试会替换 urllib.request.urlopen。生产路径不走它：默认 opener 会跟随
+# 重定向（含 ftp）并再次解析域名。
+_STDLIB_URLOPEN = urllib.request.urlopen
+
+
+def _icon_ssl_context() -> ssl.SSLContext:
+    """图标抓取用的 TLS 上下文：校验证书和主机名。"""
     ctx = ssl.create_default_context()
-    # 跳过证书校验属已知权衡（PR #2 遗留项）：目标站点证书常无效，响应内容只参与
-    # icon_hash 计算不会被执行；服务默认仅监听 127.0.0.1
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    ctx.verify_mode = ssl.CERT_REQUIRED
+    ctx.check_hostname = True
+    return ctx
+
+
+def _redact_icon_log_target(url: str) -> str:
+    """日志只留协议、主机和端口，去掉用户信息、路径、查询和片段。"""
     try:
-        with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT, context=ctx) as resp:
-            data = resp.read(max_bytes + 1)
-            if len(data) > max_bytes:
-                raise IconExtractError(f"响应超过大小上限 {max_bytes // (1024 * 1024)}MB: {url}")
-            ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-            return data, resp.geturl(), ctype
-    except IconExtractError:
-        raise
-    except urllib.error.HTTPError as e:
-        raise IconExtractError(f"HTTP {e.code} {e.reason}: {url}")
-    except urllib.error.URLError as e:
-        reason = getattr(e, "reason", e)
-        if isinstance(reason, (socket.timeout, TimeoutError)):
-            raise IconExtractError(f"连接超时: {url}")
-        if isinstance(reason, socket.gaierror):
-            raise IconExtractError(f"域名解析失败: {url}")
-        raise IconExtractError(f"连接失败: {reason}: {url}")
-    except (socket.timeout, TimeoutError):
-        raise IconExtractError(f"连接超时: {url}")
-    except Exception as e:
-        raise IconExtractError(f"抓取失败: {e}: {url}")
+        parts = urlparse(url)
+        host = parts.hostname or ""
+        scheme = (parts.scheme or "").lower()
+        try:
+            port = parts.port
+        except ValueError:
+            port = None
+    except Exception:
+        return "(unparsed)"
+    if not scheme and not host:
+        return "(unparsed)"
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    if port:
+        return f"{scheme}://{host}:{port}"
+    return f"{scheme}://{host}"
+
+
+def _icon_fetch_error(reason: str, url: str) -> IconExtractError:
+    safe = _redact_icon_log_target(url).replace("\r", " ").replace("\n", " ")
+    label = (reason or "error").replace("\r", " ").replace("\n", " ")
+    print(f"[icon] 抓取失败 {safe} ({label})", file=sys.stderr)
+    return IconExtractError(_ICON_FETCH_FAIL)
+
+
+def _icon_net_label(exc: BaseException) -> str:
+    reason: BaseException | object = exc
+    if isinstance(exc, urllib.error.URLError) and not isinstance(exc, urllib.error.HTTPError):
+        reason = exc.reason if exc.reason is not None else exc
+    if isinstance(reason, (socket.timeout, TimeoutError)):
+        return "timeout"
+    if isinstance(reason, socket.gaierror):
+        return "dns"
+    if isinstance(reason, ssl.SSLError):
+        return "tls"
+    if isinstance(reason, ConnectionRefusedError):
+        return "refused"
+    return "connect"
+
+
+def _icon_ip_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """非全球单播地址不可连接。IPv4 映射地址按内嵌 IPv4 判断。"""
+    if isinstance(ip, ipaddress.IPv6Address):
+        mapped = ip.ipv4_mapped
+        if mapped is not None:
+            return _icon_ip_blocked(mapped)
+        if ip.sixtofour is not None or ip.teredo is not None:
+            return True
+        if any(ip in net for net in _ICON_NAT64_PREFIXES):
+            return True
+        if ip.is_site_local:
+            return True
+    return bool(
+        ip.is_loopback
+        or ip.is_private
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_unspecified
+        or ip.is_multicast
+        or not ip.is_global
+    )
+
+
+def _check_icon_url(url: str) -> str:
+    """校验协议并解析出可连接的全球 IP。返回用于实际连接的地址字面量。"""
+    try:
+        parts = urlparse(url)
+        scheme = (parts.scheme or "").lower()
+        host = parts.hostname
+        port = parts.port
+    except ValueError:
+        raise _icon_fetch_error("bad-url", url) from None
+    if scheme not in ("http", "https"):
+        raise _icon_fetch_error("bad-scheme", url) from None
+    if not host:
+        raise _icon_fetch_error("bad-host", url) from None
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except (socket.gaierror, OSError, UnicodeError):
+        raise _icon_fetch_error("dns", url) from None
+    pinned: list[str] = []
+    for info in infos:
+        raw = info[4][0]
+        literal = raw.split("%", 1)[0]
+        try:
+            parsed = ipaddress.ip_address(literal)
+        except ValueError:
+            raise _icon_fetch_error("dns", url) from None
+        if _icon_ip_blocked(parsed):
+            raise _icon_fetch_error("blocked-address", url) from None
+        if raw not in pinned:
+            pinned.append(raw)
+    if not pinned:
+        raise _icon_fetch_error("dns", url) from None
+    return pinned[0]
+
+
+def _header_location(headers) -> str:
+    if not headers or not hasattr(headers, "get"):
+        return ""
+    value = headers.get("Location")
+    if not value:
+        value = headers.get("location")
+    return value if isinstance(value, str) else ""
+
+
+def _next_icon_redirect(current: str, headers, redirects: int) -> str:
+    if redirects >= _ICON_MAX_REDIRECTS:
+        raise _icon_fetch_error("redirect", current)
+    loc = _header_location(headers).strip()
+    if not loc or any(ch in loc for ch in "\r\n\x00"):
+        raise _icon_fetch_error("redirect", current)
+    return urljoin(current, loc)
+
+
+def _response_status(resp) -> int:
+    for name in ("status", "code"):
+        value = getattr(resp, name, None)
+        if isinstance(value, int):
+            return int(value)
+    return 200
+
+
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """连到已经检查过的 IP，Host 头仍用原始主机名。"""
+
+    def __init__(
+        self,
+        host,
+        port=None,
+        timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
+        source_address=None,
+        blocksize=8192,
+        *,
+        pinned_ip: str,
+    ):
+        super().__init__(host, port, timeout, source_address, blocksize)
+        self._pinned_ip = pinned_ip
+
+    def connect(self):
+        self.sock = self._create_connection(
+            (self._pinned_ip, self.port), self.timeout, self.source_address
+        )
+        try:
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError as exc:
+            if getattr(exc, "errno", None) != errno.ENOPROTOOPT:
+                raise
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """连到已经检查过的 IP，SNI 和证书主机名用原始主机名。"""
+
+    def __init__(
+        self,
+        host,
+        port=None,
+        timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
+        source_address=None,
+        context=None,
+        blocksize=8192,
+        *,
+        pinned_ip: str,
+    ):
+        super().__init__(
+            host,
+            port,
+            timeout=timeout,
+            source_address=source_address,
+            context=context,
+            blocksize=blocksize,
+        )
+        self._pinned_ip = pinned_ip
+
+    def connect(self):
+        self.sock = self._create_connection(
+            (self._pinned_ip, self.port), self.timeout, self.source_address
+        )
+        try:
+            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError as exc:
+            if getattr(exc, "errno", None) != errno.ENOPROTOOPT:
+                raise
+        if self._tunnel_host:
+            self._tunnel()
+        hostname = self._tunnel_host or self.host
+        self.sock = self._context.wrap_socket(self.sock, server_hostname=hostname)
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, pinned_ip: str):
+        super().__init__()
+        self._pinned_ip = pinned_ip
+
+    def http_open(self, req):
+        pinned = self._pinned_ip
+
+        def factory(host, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, **kwargs):
+            return _PinnedHTTPConnection(host, timeout=timeout, pinned_ip=pinned, **kwargs)
+
+        return self.do_open(factory, req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, pinned_ip: str, context: ssl.SSLContext):
+        super().__init__(context=context, check_hostname=True)
+        self._pinned_ip = pinned_ip
+
+    def https_open(self, req):
+        pinned = self._pinned_ip
+
+        def factory(host, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, context=None, **kwargs):
+            return _PinnedHTTPSConnection(
+                host, timeout=timeout, context=context, pinned_ip=pinned, **kwargs
+            )
+
+        return self.do_open(factory, req, context=self._context)
+
+
+class _NoFollowIconRedirect(urllib.request.HTTPRedirectHandler):
+    """把 30x 交回 _fetch_url，便于在下一跳连接前重新检查协议和地址。"""
+
+    def http_error_302(self, req, fp, code, msg, headers):
+        raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
+
+def _open_pinned_icon_request(req, timeout, context, pinned_ip):
+    scheme = urlparse(req.full_url).scheme.lower()
+    if scheme == "https":
+        handler = _PinnedHTTPSHandler(pinned_ip, context)
+    elif scheme == "http":
+        handler = _PinnedHTTPHandler(pinned_ip)
+    else:
+        raise _icon_fetch_error("bad-scheme", req.full_url)
+    # 空 ProxyHandler 替换掉读取环境变量的默认代理，避免代理代为连接内网或再次解析。
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        handler,
+        _NoFollowIconRedirect(),
+    )
+    opener.addheaders = []
+    return opener.open(req, timeout=timeout)
+
+
+def _icon_urlopen(req, timeout, context, pinned_ip):
+    urlopen = urllib.request.urlopen
+    if urlopen is not _STDLIB_URLOPEN:
+        return urlopen(req, timeout=timeout, context=context)
+    return _open_pinned_icon_request(req, timeout, context, pinned_ip)
+
+
+def _fetch_url(url: str, max_bytes: int, accept: str = "*/*") -> tuple[bytes, str, str]:
+    """下载 URL 内容，返回 (bytes, 最终 URL, content_type)。
+
+    只接受 http/https。每一跳（含重定向）都先解析并拒绝非全球地址，再直连该 IP。
+    HTTPS 校验证书。失败时调用方只看到「图标抓取失败」。
+    """
+    current = url
+    context = _icon_ssl_context()
+    redirects = 0
+    while True:
+        pinned = _check_icon_url(current)
+        req = urllib.request.Request(
+            current,
+            headers={
+                "User-Agent": _BROWSER_UA,
+                "Accept": accept,
+                "Accept-Language": "zh-CN,zh;q=0.9",
+            },
+            method="GET",
+        )
+        try:
+            opened = _icon_urlopen(req, _FETCH_TIMEOUT, context, pinned)
+            with opened as resp:
+                status = _response_status(resp)
+                if status in _ICON_REDIRECT_STATUSES:
+                    current = _next_icon_redirect(current, getattr(resp, "headers", None), redirects)
+                    redirects += 1
+                    continue
+                if not 200 <= status < 300:
+                    raise _icon_fetch_error("http-status", current)
+                data = resp.read(max_bytes + 1)
+                if len(data) > max_bytes:
+                    raise _icon_fetch_error("size", current)
+                headers = getattr(resp, "headers", None) or {}
+                raw_type = headers.get("Content-Type") or headers.get("content-type") or ""
+                ctype = str(raw_type).split(";")[0].strip().lower()
+                return data, current, ctype
+        except IconExtractError:
+            raise
+        except urllib.error.HTTPError as exc:
+            try:
+                if exc.code in _ICON_REDIRECT_STATUSES:
+                    current = _next_icon_redirect(current, exc.headers, redirects)
+                    redirects += 1
+                    continue
+            finally:
+                exc.close()
+            raise _icon_fetch_error("http-status", current) from None
+        except urllib.error.URLError as exc:
+            raise _icon_fetch_error(_icon_net_label(exc), current) from None
+        except (socket.timeout, TimeoutError, ssl.SSLError, OSError, http.client.HTTPException) as exc:
+            raise _icon_fetch_error(_icon_net_label(exc), current) from None
+        except Exception:
+            raise _icon_fetch_error("error", current) from None
 
 
 def _resolve_icon_from_url(url: str) -> tuple[bytes, str]:

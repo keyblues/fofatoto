@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import base64
 import io
+import ipaddress
 import json
 import os
 import re
 import socket
+import ssl
 import sys
 import tempfile
 import threading
@@ -1015,13 +1017,47 @@ class VersionSyncTest(unittest.TestCase):
         self.assertEqual(fofatoto.APP_VERSION, m_lock.group(1))
 
 
+def _fake_icon_getaddrinfo(dns="public"):
+    """图标抓取的 getaddrinfo 替身。默认把所有主机解析成公网地址，避免真实 DNS。"""
+
+    def fake(host, port, *args, **kwargs):
+        port_n = 0 if port is None else port
+        if dns == "public":
+            ips = ["93.184.216.34"]
+        elif callable(dns):
+            ips = dns(host)
+        elif isinstance(dns, dict):
+            if host not in dns:
+                raise socket.gaierror(8, "Name or service not known")
+            ips = dns[host]
+        else:
+            raise socket.gaierror(8, "Name or service not known")
+        if ips is None:
+            raise socket.gaierror(8, "Name or service not known")
+        if isinstance(ips, str):
+            ips = [ips]
+        rows = []
+        for ip in ips:
+            family = socket.AF_INET6 if ":" in str(ip) else socket.AF_INET
+            rows.append((family, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", (ip, port_n)))
+        if not rows:
+            raise socket.gaierror(8, "Name or service not known")
+        return rows
+
+    return fake
+
+
 class FakeHTTPResponse:
     """图标抓取用 urlopen 返回替身（支持 with 上下文与 read(n)）"""
 
-    def __init__(self, data: bytes, url: str, ctype: str = "text/html"):
+    def __init__(self, data: bytes, url: str, ctype: str = "text/html", status: int = 200, headers=None):
         self._data = data
         self._url = url
+        self.status = status
+        self.code = status
         self.headers = {"Content-Type": ctype}
+        if headers:
+            self.headers.update(headers)
 
     def read(self, n: int = -1) -> bytes:
         return self._data if n is None or n < 0 else self._data[:n]
@@ -1158,7 +1194,7 @@ class ResolveIconTest(unittest.TestCase):
     ICO = b"\x00\x00\x01\x00" + b"rest-of-ico"
 
     @staticmethod
-    def _run(target, routes, allow_file=True, calls=None):
+    def _run(target, routes, allow_file=True, calls=None, dns="public"):
         def fake_urlopen(req, timeout=None, context=None):
             url = getattr(req, "full_url", req)
             if calls is not None:
@@ -1170,7 +1206,10 @@ class ResolveIconTest(unittest.TestCase):
                 raise val
             return val
 
-        with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
+        with (
+            mock.patch.object(socket, "getaddrinfo", _fake_icon_getaddrinfo(dns)),
+            mock.patch.object(urllib.request, "urlopen", fake_urlopen),
+        ):
             return fofatoto.resolve_icon(target, allow_file=allow_file)
 
     def test_raw_hash_passthrough(self):
@@ -1306,19 +1345,26 @@ class ResolveIconTest(unittest.TestCase):
             raise urllib.error.URLError("network disabled")
 
         try:
-            with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
+            with (
+                mock.patch.object(socket, "getaddrinfo", _fake_icon_getaddrinfo()),
+                mock.patch.object(urllib.request, "urlopen", fake_urlopen),
+            ):
                 with self.assertRaises(fofatoto.IconExtractError):
                     fofatoto.resolve_icon(path, allow_file=False)
         finally:
             os.unlink(path)
 
     def test_dns_error_classified(self):
+        # 连接阶段的解析失败与超时、拒绝使用同一句，不回显主机名
         routes = {
             "https://does-not-exist.example": urllib.error.URLError(socket.gaierror(-2, "Name or service not known")),
         }
         with self.assertRaises(fofatoto.IconExtractError) as cm:
-            self._run("does-not-exist.example", routes)
-        self.assertIn("域名解析失败", str(cm.exception))
+            self._run("https://does-not-exist.example", routes)
+        msg = str(cm.exception)
+        self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+        self.assertNotIn("does-not-exist.example", msg)
+        self.assertNotIn("域名解析失败", msg)
 
     def test_direct_image_uses_icon_limit_html_uses_html_limit(self):
         # PR #2 复核意见：2–5MB 直接图片按图标上限放行，HTML 单独施加小上限
@@ -1343,7 +1389,10 @@ class ResolveIconTest(unittest.TestCase):
         with mock.patch.object(fofatoto, "_MAX_ICON_BYTES", 100):
             with self.assertRaises(fofatoto.IconExtractError) as cm:
                 self._run("https://example.com/logo.ico", routes)
-            self.assertIn("超过大小上限", str(cm.exception))
+            msg = str(cm.exception)
+            self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+            self.assertNotIn("example.com", msg)
+            self.assertNotIn("logo.ico", msg)
 
     def test_dead_link_falls_back_to_favicon_ico(self):
         calls = []
@@ -1417,18 +1466,370 @@ class ResolveIconTest(unittest.TestCase):
     def test_timeout_error_classified(self):
         routes = {"https://slow.example": socket.timeout("timed out")}
         with self.assertRaises(fofatoto.IconExtractError) as cm:
-            self._run("slow.example", routes)
-        self.assertIn("连接超时", str(cm.exception))
+            self._run("https://slow.example", routes)
+        msg = str(cm.exception)
+        self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+        self.assertNotIn("slow.example", msg)
+        self.assertNotIn("连接超时", msg)
+        self.assertNotIn("timed out", msg)
 
     def test_http_status_error_classified(self):
         routes = {
-            "https://example.com": urllib.error.HTTPError(
-                "https://example.com", 503, "Service Unavailable", None, None
+            "https://example.com/secret": urllib.error.HTTPError(
+                "https://example.com/secret", 503, "Service Unavailable", None, None
             )
         }
         with self.assertRaises(fofatoto.IconExtractError) as cm:
-            self._run("example.com", routes)
-        self.assertIn("HTTP 503", str(cm.exception))
+            self._run("https://example.com/secret", routes)
+        msg = str(cm.exception)
+        self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+        self.assertNotIn("503", msg)
+        self.assertNotIn("secret", msg)
+        self.assertNotIn("example.com", msg)
+
+
+class IconFetchGuardTest(unittest.TestCase):
+    """图标抓取只连接全球 http(s)，失败文案不提供端口探测信息。"""
+
+    PNG = b"\x89PNG\r\n\x1a\n" + b"rest-of-png"
+
+    def test_address_policy_blocks_non_global(self):
+        blocked = [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "0.0.0.0",
+            "100.64.0.1",
+            "224.0.0.1",
+            "240.0.0.1",
+            "255.255.255.255",
+            "::1",
+            "::",
+            "fe80::1",
+            "fc00::1",
+            "fd00:ec2::254",
+            "fec0::1",
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
+            "::ffff:169.254.169.254",
+            "::ffff:100.64.0.1",
+            "2002:a9fe:a9fe::",
+            "64:ff9b::169.254.169.254",
+            "64:ff9b::8.8.8.8",
+        ]
+        allowed = ["8.8.8.8", "1.1.1.1", "93.184.216.34", "::ffff:8.8.8.8", "2606:4700:4700::1111"]
+        for text in blocked:
+            with self.subTest(blocked=text):
+                self.assertTrue(fofatoto._icon_ip_blocked(ipaddress.ip_address(text)))
+        for text in allowed:
+            with self.subTest(allowed=text):
+                self.assertFalse(fofatoto._icon_ip_blocked(ipaddress.ip_address(text)))
+
+    def test_literal_non_global_hosts_never_connect(self):
+        targets = [
+            "http://127.0.0.1/",
+            "http://127.0.0.1:22/",
+            "http://10.1.2.3/secret",
+            "http://192.168.1.1/",
+            "http://172.16.5.5/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[::1]/",
+            "http://[::ffff:169.254.169.254]/",
+            "http://[fd00:ec2::254]/",
+            "http://[fe80::1]/",
+            "http://0.0.0.0/",
+            "http://100.64.0.1/",
+            "http://224.0.0.1/",
+            "http://localhost/favicon.ico",
+        ]
+
+        def boom(*args, **kwargs):
+            raise AssertionError("urlopen should not be called")
+
+        with mock.patch.object(urllib.request, "urlopen", boom):
+            for target in targets:
+                with self.subTest(target=target):
+                    with self.assertRaises(fofatoto.IconExtractError) as cm:
+                        fofatoto.resolve_icon(target, allow_file=False)
+                    msg = str(cm.exception)
+                    self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+                    self.assertNotIn("169.254", msg)
+                    self.assertNotIn("meta-data", msg)
+                    self.assertNotIn("secret", msg)
+                    self.assertNotIn("连接超时", msg)
+                    self.assertNotIn("连接失败", msg)
+
+    def test_dns_to_private_or_metadata_rejected(self):
+        calls = []
+
+        def dns(host):
+            if host == "metadata.google.internal":
+                return ["169.254.169.254"]
+            if host == "split.example":
+                return ["8.8.8.8", "10.0.0.1"]
+            return ["93.184.216.34"]
+
+        for target in ("https://metadata.google.internal/computeMetadata/v1/", "https://split.example/a"):
+            with self.subTest(target=target):
+                calls.clear()
+                with self.assertRaises(fofatoto.IconExtractError) as cm:
+                    ResolveIconTest._run(target, {}, calls=calls, allow_file=False, dns=dns)
+                self.assertEqual(calls, [])
+                msg = str(cm.exception)
+                self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+                self.assertNotIn("metadata", msg)
+                self.assertNotIn("169.254", msg)
+                self.assertNotIn("10.0.0.1", msg)
+
+    def test_redirect_to_private_and_non_http_rejected(self):
+        cases = {
+            "http://169.254.169.254/latest/meta-data/": "169.254.169.254",
+            "ftp://127.0.0.1/secret.ico": "ftp",
+            "file:///etc/passwd": "passwd",
+        }
+        for location, leaked in cases.items():
+            with self.subTest(location=location):
+                calls = []
+                routes = {
+                    "http://public.example/start": urllib.error.HTTPError(
+                        "http://public.example/start",
+                        302,
+                        "Found",
+                        {"Location": location},
+                        None,
+                    )
+                }
+                with self.assertRaises(fofatoto.IconExtractError) as cm:
+                    ResolveIconTest._run(
+                        "http://public.example/start",
+                        routes,
+                        calls=calls,
+                        allow_file=False,
+                        dns={
+                            "public.example": "93.184.216.34",
+                            "127.0.0.1": "127.0.0.1",
+                            "169.254.169.254": "169.254.169.254",
+                        },
+                    )
+                self.assertEqual(calls, ["http://public.example/start"])
+                msg = str(cm.exception)
+                self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+                self.assertNotIn(leaked, msg)
+                self.assertNotIn(location, msg)
+
+    def test_response_redirect_to_private_rejected(self):
+        calls = []
+        routes = {
+            "http://public.example/start": FakeHTTPResponse(
+                b"",
+                "http://public.example/start",
+                status=302,
+                headers={"Location": "http://10.2.3.4/hidden"},
+            )
+        }
+        with self.assertRaises(fofatoto.IconExtractError) as cm:
+            ResolveIconTest._run(
+                "http://public.example/start",
+                routes,
+                calls=calls,
+                allow_file=False,
+                dns={"public.example": "93.184.216.34", "10.2.3.4": "10.2.3.4"},
+            )
+        self.assertEqual(calls, ["http://public.example/start"])
+        self.assertEqual(str(cm.exception), fofatoto._ICON_FETCH_FAIL)
+        self.assertNotIn("10.2.3.4", str(cm.exception))
+        self.assertNotIn("hidden", str(cm.exception))
+
+    def test_oversized_body_after_redirect_hides_final_url(self):
+        # 2xx 超过大小上限时也走统一失败文案，不回显跳转后的路径和用户信息
+        secret = "https://user:s3cret@cdn.example/private/icon.bin?token=abc"
+        routes = {
+            "http://public.example/start": FakeHTTPResponse(
+                b"",
+                "http://public.example/start",
+                status=302,
+                headers={"Location": secret},
+            ),
+            secret: FakeHTTPResponse(b"x" * 200, secret, "application/octet-stream"),
+        }
+        with mock.patch.object(fofatoto, "_MAX_ICON_BYTES", 100):
+            with self.assertRaises(fofatoto.IconExtractError) as cm:
+                ResolveIconTest._run(
+                    "http://public.example/start",
+                    routes,
+                    allow_file=False,
+                    dns={"public.example": "93.184.216.34", "cdn.example": "93.184.216.34"},
+                )
+        msg = str(cm.exception)
+        self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+        self.assertNotIn("cdn.example", msg)
+        self.assertNotIn("private", msg)
+        self.assertNotIn("s3cret", msg)
+        self.assertNotIn("token", msg)
+        self.assertNotIn("user:", msg)
+        self.assertNotIn("超过大小上限", msg)
+
+    def test_public_redirect_still_followed(self):
+        calls = []
+        routes = {
+            "http://example.com/a": urllib.error.HTTPError(
+                "http://example.com/a",
+                302,
+                "Found",
+                {"Location": "https://cdn.example/icon.png"},
+                None,
+            ),
+            "https://cdn.example/icon.png": FakeHTTPResponse(
+                self.PNG, "https://cdn.example/icon.png", "image/png"
+            ),
+        }
+        info = ResolveIconTest._run("http://example.com/a", routes, calls=calls, allow_file=False)
+        self.assertEqual(info["icon_bytes"], self.PNG)
+        self.assertEqual(info["icon_url"], "https://cdn.example/icon.png")
+        self.assertEqual(calls, ["http://example.com/a", "https://cdn.example/icon.png"])
+
+    def test_public_https_verifies_tls_and_fetches(self):
+        seen = {}
+
+        def fake_urlopen(req, timeout=None, context=None):
+            seen["context"] = context
+            seen["url"] = getattr(req, "full_url", req)
+            return FakeHTTPResponse(self.PNG, seen["url"], "image/png")
+
+        with (
+            mock.patch.object(socket, "getaddrinfo", _fake_icon_getaddrinfo()),
+            mock.patch.object(urllib.request, "urlopen", fake_urlopen),
+        ):
+            info = fofatoto.resolve_icon("https://example.com/logo.png", allow_file=False)
+        self.assertEqual(info["icon_bytes"], self.PNG)
+        self.assertEqual(info["source"], "url")
+        self.assertEqual(seen["url"], "https://example.com/logo.png")
+        self.assertIsNotNone(seen["context"])
+        self.assertEqual(seen["context"].verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(seen["context"].check_hostname)
+        ctx = fofatoto._icon_ssl_context()
+        self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(ctx.check_hostname)
+
+    def test_html_icon_link_to_loopback_is_not_fetched(self):
+        calls = []
+        routes = {
+            "https://example.com": FakeHTTPResponse(
+                b'<link rel="icon" href="http://127.0.0.1/secret.ico">',
+                "https://example.com/",
+                "text/html",
+            ),
+            "https://example.com/favicon.ico": FakeHTTPResponse(
+                b"\x00\x00\x01\x00ico", "https://example.com/favicon.ico", "image/x-icon"
+            ),
+        }
+        info = ResolveIconTest._run(
+            "https://example.com",
+            routes,
+            calls=calls,
+            allow_file=False,
+            dns=lambda host: ["127.0.0.1"] if host == "127.0.0.1" else ["93.184.216.34"],
+        )
+        self.assertTrue(info["icon_url"].endswith("/favicon.ico"))
+        self.assertNotIn("http://127.0.0.1/secret.ico", calls)
+        self.assertNotIn("secret", info["icon_url"])
+
+    def test_connect_failures_share_one_message(self):
+        samples = [
+            ("https://slow.example/a", socket.timeout("timed out")),
+            ("https://down.example/a", urllib.error.URLError(ConnectionRefusedError(111, "refused"))),
+            (
+                "https://busy.example/secret",
+                urllib.error.HTTPError("https://busy.example/secret", 503, "nope", None, None),
+            ),
+            (
+                "https://nx.example/a",
+                urllib.error.URLError(socket.gaierror(-2, "Name or service not known")),
+            ),
+        ]
+        messages = []
+        for url, exc in samples:
+            with self.assertRaises(fofatoto.IconExtractError) as cm:
+                ResolveIconTest._run(url, {url: exc}, allow_file=False)
+            messages.append(str(cm.exception))
+            self.assertNotIn("secret", str(cm.exception))
+            self.assertNotIn(url, str(cm.exception))
+        self.assertEqual(set(messages), {fofatoto._ICON_FETCH_FAIL})
+
+    def test_unpatched_urlopen_pins_ip_and_ignores_proxy(self):
+        seen = {}
+
+        def fake_dns(host, port, *args, **kwargs):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port or 80))]
+
+        def fake_cc(address, timeout=None, source_address=None):
+            seen["address"] = address
+            raise TimeoutError("stop")
+
+        env = {"http_proxy": "http://127.0.0.1:9", "HTTP_PROXY": "http://127.0.0.1:9", "https_proxy": "http://127.0.0.1:9"}
+        with (
+            mock.patch.dict(os.environ, env, clear=False),
+            mock.patch.object(socket, "getaddrinfo", fake_dns),
+            mock.patch.object(socket, "create_connection", fake_cc),
+        ):
+            with self.assertRaises(fofatoto.IconExtractError) as cm:
+                fofatoto._fetch_url("http://example.com/favicon.ico", 1024)
+        self.assertEqual(seen["address"], ("93.184.216.34", 80))
+        self.assertEqual(str(cm.exception), fofatoto._ICON_FETCH_FAIL)
+        self.assertNotIn("example.com", str(cm.exception))
+
+    def test_https_pin_keeps_sni_and_verifies(self):
+        conn = fofatoto._PinnedHTTPSConnection(
+            "example.com",
+            timeout=1,
+            context=fofatoto._icon_ssl_context(),
+            pinned_ip="93.184.216.34",
+        )
+        created = {}
+
+        class Sock:
+            def setsockopt(self, *args, **kwargs):
+                return None
+
+        def fake_cc(address, timeout=None, source_address=None):
+            created["address"] = address
+            return Sock()
+
+        wrapped = {}
+
+        def fake_wrap(sock, server_hostname=None):
+            wrapped["sni"] = server_hostname
+            return sock
+
+        conn._create_connection = fake_cc
+        conn._context.wrap_socket = fake_wrap
+        conn.connect()
+        self.assertEqual(created["address"], ("93.184.216.34", 443))
+        self.assertEqual(wrapped["sni"], "example.com")
+        self.assertEqual(conn._context.verify_mode, ssl.CERT_REQUIRED)
+        self.assertTrue(conn._context.check_hostname)
+
+    def test_getaddrinfo_failure_does_not_connect(self):
+        calls = []
+
+        def boom_dns(host, port, *args, **kwargs):
+            raise socket.gaierror(8, "Name or service not known")
+
+        def boom_open(*args, **kwargs):
+            calls.append(args)
+            raise AssertionError("urlopen should not be called")
+
+        with (
+            mock.patch.object(socket, "getaddrinfo", boom_dns),
+            mock.patch.object(urllib.request, "urlopen", boom_open),
+        ):
+            with self.assertRaises(fofatoto.IconExtractError) as cm:
+                fofatoto.resolve_icon("https://missing.example/a", allow_file=False)
+        self.assertEqual(calls, [])
+        self.assertEqual(str(cm.exception), fofatoto._ICON_FETCH_FAIL)
+        self.assertNotIn("missing.example", str(cm.exception))
 
 
 class IconCacheTest(unittest.TestCase):
@@ -1444,7 +1845,10 @@ class IconCacheTest(unittest.TestCase):
 
         fofatoto._ICON_CACHE.clear()
         try:
-            with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
+            with (
+                mock.patch.object(socket, "getaddrinfo", _fake_icon_getaddrinfo()),
+                mock.patch.object(urllib.request, "urlopen", fake_urlopen),
+            ):
                 info = fofatoto.resolve_icon_cached("https://example.com/f.png")
                 again = fofatoto.resolve_icon_cached("https://example.com/f.png")
         finally:
@@ -1462,8 +1866,10 @@ class IconCacheTest(unittest.TestCase):
 
         fofatoto._ICON_CACHE.clear()
         try:
-            with mock.patch.object(urllib.request, "urlopen", fake_urlopen), mock.patch.object(
-                fofatoto, "_ICON_CACHE_MAX", 2
+            with (
+                mock.patch.object(socket, "getaddrinfo", _fake_icon_getaddrinfo()),
+                mock.patch.object(urllib.request, "urlopen", fake_urlopen),
+                mock.patch.object(fofatoto, "_ICON_CACHE_MAX", 2),
             ):
                 for target in ("https://a.test", "https://b.test", "https://c.test"):
                     fofatoto.resolve_icon_cached(target)
@@ -1483,7 +1889,10 @@ class IconCacheTest(unittest.TestCase):
 
         fofatoto._ICON_CACHE.clear()
         try:
-            with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
+            with (
+                mock.patch.object(socket, "getaddrinfo", _fake_icon_getaddrinfo()),
+                mock.patch.object(urllib.request, "urlopen", fake_urlopen),
+            ):
                 with self.assertRaises(fofatoto.IconExtractError):
                     fofatoto.resolve_icon_cached("y.test")
                 state["fail"] = False
@@ -1561,12 +1970,34 @@ class ApiIconEndpointTest(unittest.TestCase):
             def fake_urlopen(req, timeout=None, context=None):
                 raise urllib.error.URLError("network disabled")
 
-            with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
+            with (
+                mock.patch.object(socket, "getaddrinfo", _fake_icon_getaddrinfo()),
+                mock.patch.object(urllib.request, "urlopen", fake_urlopen),
+            ):
                 handler._handle_icon()
             handler._send_json.assert_not_called()
             self.assertIsInstance(sent["error"], fofatoto.IconExtractError)
+            self.assertNotIn("local-secret", str(sent["error"]))
         finally:
             os.unlink(path)
+
+    def test_metadata_target_error_hides_url_and_cause(self):
+        handler, sent = self._handler({"target": "http://169.254.169.254/latest/meta-data/"})
+
+        def boom(*args, **kwargs):
+            raise AssertionError("urlopen should not be called")
+
+        fofatoto._ICON_CACHE.clear()
+        try:
+            with mock.patch.object(urllib.request, "urlopen", boom):
+                handler._handle_icon()
+        finally:
+            fofatoto._ICON_CACHE.clear()
+        handler._send_json.assert_not_called()
+        self.assertEqual(str(sent["error"]), fofatoto._ICON_FETCH_FAIL)
+        self.assertNotIn("169.254", str(sent["error"]))
+        self.assertNotIn("meta-data", str(sent["error"]))
+        self.assertNotIn("超时", str(sent["error"]))
 
 
 class MainIconModeTest(unittest.TestCase):
