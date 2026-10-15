@@ -1,4 +1,8 @@
 {
     "url": "https://fofa.info",
-    "key": "your-fofa-key-here"
+    "key": "your-fofa-key-here",
+    "web_auth": {
+        "enabled": false,
+        "secret": ""
+    }
 }

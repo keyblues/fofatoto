@@ -9,11 +9,14 @@ import argparse
 import base64
 import csv
 import hashlib
+import hmac
+import http.cookies
 import http.server
 import ipaddress
 import json
 import os
 import re
+import secrets
 import socket
 import ssl
 import subprocess
@@ -36,7 +39,11 @@ from urllib.parse import parse_qs, quote, unquote_to_bytes, urljoin, urlparse
 
 APP_VERSION = "1.8.0"
 GITHUB_URL = "https://github.com/keyblues/fofatoto"
-DEFAULT_CONFIG = {"url": "https://fofa.info", "key": "your-fofa-key-here"}
+DEFAULT_CONFIG = {
+    "url": "https://fofa.info",
+    "key": "your-fofa-key-here",
+    "web_auth": {"enabled": False, "secret": ""},
+}
 DEFAULT_WEB_PORT = 17380
 DEFAULT_FIELD_LIST = [
     "host",
@@ -218,7 +225,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Micr
 #resultsTable.picking td{cursor:crosshair}
 #resultsTable.picking td:hover{background:#fffbeb;outline:1px solid var(--warning);box-shadow:inset 0 0 0 1px var(--warning)}
 .settings-wrap{position:relative}
-.settings-popup{display:none;position:absolute;top:100%;right:0;margin-top:4px;background:var(--card-bg);border:1px solid var(--border);border-radius:2px;padding:10px 12px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.08);min-width:180px}
+.settings-popup{display:none;position:absolute;top:100%;left:0;margin-top:4px;background:var(--card-bg);border:1px solid var(--border);border-radius:2px;padding:10px 12px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.08);min-width:180px;max-width:calc(100vw - 48px)}
 .settings-popup.show{display:block}
 .settings-popup label{display:flex;align-items:center;gap:6px;padding:4px 0;font-size:12px;cursor:pointer;white-space:nowrap}
 .exc-chips{display:inline-flex;gap:4px;flex-wrap:wrap;align-items:center}
@@ -357,7 +364,7 @@ td{max-width:240px}
 <label>数量:<select id="instantSize"><option value="10">10</option><option value="20">20</option><option value="50">50</option><option value="100" selected>100</option><option value="200">200</option><option value="500">500</option><option value="1000">1000</option><option value="2000">2000</option><option value="5000">5000</option><option value="10000">10000</option></select></label>
 <span class="exc-chips" id="exclusionChips"></span>
 <button class="mini-btn" onclick="openIconModal()">Icon 提取</button>
-<div class="settings-wrap"><button class="mini-btn" onclick="toggleSettings(event)">设置</button><div class="settings-popup" id="settingsPopup"><label><input type="checkbox" id="fitToWindow" checked onchange="toggleFitToWindow(this)"> 适应窗口宽度</label><label><input type="checkbox" id="instantFull"> 全部数据</label><label><input type="checkbox" id="instantAutoQuery"> 选取查询后自动搜索</label><label><input type="checkbox" id="showHistory" checked onchange="toggleShowHistory(this)"> 显示历史记录</label></div></div>
+<div class="settings-wrap"><button class="mini-btn" onclick="toggleSettings(event)">设置</button><div class="settings-popup" id="settingsPopup"><label><input type="checkbox" id="fitToWindow" checked onchange="toggleFitToWindow(this)"> 适应窗口宽度</label><label><input type="checkbox" id="instantFull"> 全部数据</label><label><input type="checkbox" id="instantAutoQuery"> 选取查询后自动搜索</label><label><input type="checkbox" id="showHistory" checked onchange="toggleShowHistory(this)"> 显示历史记录</label><button type="button" class="mini-btn" id="logoutBtn" style="display:none;margin-top:6px" onclick="logoutWebAuth()">退出登录</button></div></div>
 </div>
 <div class="options-row" id="exportOptions" style="display:none">
 <label>覆盖率:<input type="number" id="exportFill" value="0.8" min="0.1" max="1.0" step="0.1"></label>
@@ -443,7 +450,7 @@ function setupQueryDropTarget(){var input=document.getElementById("queryInput");
 function showConfigNotice(d){var box=document.getElementById("configAlert");document.getElementById("configAlertTitle").textContent="未配置有效的 FOFA API Key";document.getElementById("configAlertText").textContent="请编辑下方配置文件，保存后刷新本页面。";document.getElementById("configPath").textContent=d.config_path||"";document.getElementById("configTemplate").textContent=d.config_template||"";box.classList.add("show")}
 function hideConfigNotice(){document.getElementById("configAlert").classList.remove("show")}
 function formatApiError(data,fallback){var msg=(data&&data.error)||fallback||"请求失败";if(data&&data.data&&data.data.configured===false&&data.data.config_path){msg+="。配置文件: "+data.data.config_path}return msg}
-function loadAccountInfo(silent){return fetch("/api/info").then(function(r){return r.json()}).then(function(data){var d=data.data||{};if(d.configured===false){showConfigNotice(d);document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">未配置</span> 等待 API Key';return}hideConfigNotice();if(data.success){if(d.relay){var vClass=d.isvip?"active":"inactive",vText=d.isvip?"有效":"无效";var h='<span class="vip-badge inactive">中转站</span> <span class="vip-badge '+vClass+'">'+vText+'</span> '+"剩余查询: <strong>"+escHtml(d.remain_api_query||"N/A")+"</strong>";if(d.today_remaining!==null&&d.today_remaining!==undefined)h+=" | 今日剩余: <strong>"+escHtml(d.today_remaining)+"</strong>";h+=" | 过期: "+escHtml(d.expiration||"N/A");document.getElementById("accountInfo").innerHTML=h}else{var vipClass=d.isvip?"active":"inactive",vipText=d.isvip?"VIP "+(d.vip_level||""):"未激活",serverText=d.server_ok?"正常":"异常",serverClass=d.server_ok?"ok":"fail";document.getElementById("accountInfo").innerHTML='<span class="vip-badge '+vipClass+'">'+escHtml(vipText)+'</span> 服务器: <span class="server-status '+serverClass+'">'+serverText+'</span> | 剩余查询: <strong>'+escHtml(d.remain_api_query||"N/A")+'</strong> | 过期: '+escHtml(d.expiration||"N/A");if(d.server_ok===false&&d.error&&!silent)showMessage("error",d.error)}}else{if(!silent){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 账户信息不可用';showMessage("error",formatApiError(data,"账户信息不可用"))}}}).catch(function(e){if(!silent){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 本地服务不可用';showMessage("error","网络错误: "+e.message)}}).finally(function(){updateLayout()})}
+function loadAccountInfo(silent){return fetch("/api/info").then(function(r){return r.json()}).then(function(data){var d=data.data||{};toggleLogoutItem(!!d.web_auth_enabled);if(d.configured===false){showConfigNotice(d);document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">未配置</span> 等待 API Key';return}hideConfigNotice();if(data.success){if(d.relay){var vClass=d.isvip?"active":"inactive",vText=d.isvip?"有效":"无效";var h='<span class="vip-badge inactive">中转站</span> <span class="vip-badge '+vClass+'">'+vText+'</span> '+"剩余查询: <strong>"+escHtml(d.remain_api_query||"N/A")+"</strong>";if(d.today_remaining!==null&&d.today_remaining!==undefined)h+=" | 今日剩余: <strong>"+escHtml(d.today_remaining)+"</strong>";h+=" | 过期: "+escHtml(d.expiration||"N/A");document.getElementById("accountInfo").innerHTML=h}else{var vipClass=d.isvip?"active":"inactive",vipText=d.isvip?"VIP "+(d.vip_level||""):"未激活",serverText=d.server_ok?"正常":"异常",serverClass=d.server_ok?"ok":"fail";document.getElementById("accountInfo").innerHTML='<span class="vip-badge '+vipClass+'">'+escHtml(vipText)+'</span> 服务器: <span class="server-status '+serverClass+'">'+serverText+'</span> | 剩余查询: <strong>'+escHtml(d.remain_api_query||"N/A")+'</strong> | 过期: '+escHtml(d.expiration||"N/A");if(d.server_ok===false&&d.error&&!silent)showMessage("error",d.error)}}else{if(!silent){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 账户信息不可用';showMessage("error",formatApiError(data,"账户信息不可用"))}}}).catch(function(e){if(!silent){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 本地服务不可用';showMessage("error","网络错误: "+e.message)}}).finally(function(){updateLayout()})}
 function startAccountRefresh(){if(accountRefreshTimer)return;accountRefreshTimer=setInterval(function(){loadAccountInfo(true);lastAccountRefresh=Date.now()},ACCOUNT_REFRESH_INTERVAL)}
 function stopAccountRefresh(){if(accountRefreshTimer){clearInterval(accountRefreshTimer);accountRefreshTimer=null}}
 function onVisibilityChange(){if(document.hidden){stopAccountRefresh()}else{var elapsed=Date.now()-lastAccountRefresh;if(elapsed>=ACCOUNT_REFRESH_INTERVAL){loadAccountInfo(true);lastAccountRefresh=Date.now()}startAccountRefresh()}}
@@ -498,6 +505,8 @@ function removeExclusion(index){if(index<0||index>=excludedFilters.length)return
 function renderExclusionChips(){var c=document.getElementById("exclusionChips");if(!c)return;var h="";excludedFilters.forEach(function(f,i){h+='<span class="exc-chip">不看 '+escHtml(f.field)+'="'+escHtml(f.value)+'"<span class="exc-x" onclick="removeExclusion('+i+')">&times;</span></span>'});c.innerHTML=h}
 function renderCurrentView(){var view=currentResults,ips={};if(excludedFilters.length){view=currentResults.filter(function(r){return !excludedFilters.some(function(f){return String(r[f.field]||"")===String(f.value)})})}view.forEach(function(r){if(r.ip)ips[r.ip]=1});renderResults({results:view,columns:currentColumns,total:currentResults.length,unique_ips:Object.keys(ips).length});renderExclusionChips();if(excludedFilters.length)showPreviewStatus("已排除 "+excludedFilters.length+" 项，显示 "+view.length+"/"+currentResults.length)}
 function toggleSettings(e){if(e)e.stopPropagation();var p=document.getElementById("settingsPopup");p.classList.toggle("show")}
+function toggleLogoutItem(show){var b=document.getElementById("logoutBtn");if(b)b.style.display=show?"block":"none"}
+function logoutWebAuth(){fetch("/api/auth/logout",{method:"POST"}).then(function(r){return r.json()}).then(function(){location.href="/"}).catch(function(){location.href="/"})}
 function clearResults(){exitPickMode();excludedFilters=[];currentView=[];rowHeight=0;vsLastWindow=null;renderExclusionChips();previewRendered=false;document.getElementById("resultsArea").style.display="none";document.getElementById("resultsTable").style.display="table";document.getElementById("emptyState").style.display="none";document.querySelector("#resultsTable thead").innerHTML="";document.querySelector("#resultsTable tbody").innerHTML="";currentResults=[];currentColumns=[];sortColumn=null;updateLayout()}
 function updateShellHeight(){var header=document.querySelector(".header");if(header)document.documentElement.style.setProperty("--header-height",Math.ceil(header.getBoundingClientRect().height)+"px")}
 function updateLayout(){syncModeContent();updateShellHeight();fitHistoryDropdown();fitResultsHeight()}
@@ -554,6 +563,8 @@ class ConfigManager:
         self.config_file = self.config_dir / "config.json"
         self.url = ""
         self.key = ""
+        self.web_auth_enabled = False
+        self.web_auth_secret = ""
 
     def _get_config_dir(self) -> Path:
         """获取配置目录。
@@ -595,9 +606,21 @@ class ConfigManager:
                 data = json.loads(self.config_file.read_text(encoding="utf-8"))
                 self.url = data.get("url", "")
                 self.key = data.get("key", "")
+                self._load_web_auth(data)
             except Exception as e:
                 print(f"[警告] 读取 config.json 失败: {e}", file=sys.stderr)
         return self
+
+    def _load_web_auth(self, data: dict):
+        """解析 web_auth 访问鉴权配置（缺失或类型错误一律回退为关闭）。"""
+        web_auth = data.get("web_auth")
+        if not isinstance(web_auth, dict):
+            self.web_auth_enabled = False
+            self.web_auth_secret = ""
+            return
+        self.web_auth_enabled = bool(web_auth.get("enabled"))
+        secret = web_auth.get("secret", "")
+        self.web_auth_secret = secret if isinstance(secret, str) else ""
 
     def is_valid(self) -> bool:
         placeholder_keys = {
@@ -620,6 +643,7 @@ class ConfigManager:
             "config_template": json.dumps(
                 DEFAULT_CONFIG, ensure_ascii=False, indent=4
             ),
+            "web_auth_enabled": self.web_auth_enabled,
         }
 
     def get_client(self) -> Optional[FofaClient]:
@@ -2924,6 +2948,135 @@ def _write_web_log(line: str) -> None:
         sys.stderr.flush()
 
 
+# ============ Web 访问鉴权 ============
+
+# 由 config.json 的 web_auth（enabled/secret）控制。令牌为
+# "{签发秒级时间戳}.{HMAC-SHA256(secret, 时间戳)}"，无服务端会话存储；
+# 修改 web_auth.secret 立即吊销全部已发令牌（随配置热更新生效）。
+WEB_AUTH_COOKIE_NAME = "fofatoto_auth"
+WEB_AUTH_TOKEN_TTL = 30 * 86400  # 令牌有效期 30 天
+
+
+def generate_web_auth_token(secret: str) -> str:
+    """签发访问令牌：`{签发秒级时间戳}.{HMAC 签名}`。"""
+    issued = str(int(time.time()))
+    signature = hmac.new(
+        secret.encode("utf-8"), issued.encode("ascii"), hashlib.sha256
+    ).hexdigest()
+    return f"{issued}.{signature}"
+
+
+def verify_web_auth_token(token: str, secret: str) -> bool:
+    """校验访问令牌：签名恒时比较 + 有效期检查；畸形令牌一律拒绝。"""
+    if not secret or not token:
+        return False
+    parts = token.split(".", 1)
+    if len(parts) != 2:
+        return False
+    issued, signature = parts
+    # 秒级时间戳 2286 年前不超过 11 位，超长输入直接拒绝，避免无谓解析；
+    # isdigit() 对部分非 ASCII 数字也返回 true，须配合 isascii() 收紧
+    if len(issued) > 11 or not (issued.isascii() and issued.isdigit()):
+        return False
+    expected = hmac.new(
+        secret.encode("utf-8"), issued.encode("ascii"), hashlib.sha256
+    ).hexdigest()
+    # 签名来自外部输入，统一转 bytes 后恒时比较（str 直接比较要求纯 ASCII）
+    if not hmac.compare_digest(
+        signature.encode("utf-8"), expected.encode("ascii")
+    ):
+        return False
+    return (int(time.time()) - int(issued)) < WEB_AUTH_TOKEN_TTL
+
+
+# 登录失败全局限流（所有客户端共享一份计数）：滑动窗口内失败超过阈值后进入
+# 冷却。冷却期间新的失败请求直接快速拒绝——单请求 sleep(1) 在
+# ThreadingHTTPServer（每连接一线程）下不构成全局限流：并行连接各自休眠仍可
+# 全速爆破，还会占满线程。冷却期不再逐请求 sleep，线程立即释放，同时把并行
+# 爆破的有效速率压到窗口阈值。
+# 是否 sleep 必须与记账在同一把锁里决定。先放开锁再比对密钥、失败后再记账的话，
+# 并行请求会同时看到空窗口，全部 sleep(1)，阈值挡不住线程占用。
+_WEB_AUTH_LOGIN_WINDOW = 60.0  # 失败统计窗口（秒）
+_WEB_AUTH_LOGIN_MAX_FAILS = 5  # 窗口内允许的失败次数
+_WEB_AUTH_LOGIN_COOLDOWN = 60.0  # 达到阈值后的冷却时长（秒）
+
+_web_login_fails: list[float] = []  # 窗口内的失败时间戳
+_web_login_lock = threading.Lock()
+
+
+def _prune_login_fails(now: float) -> float:
+    """清理过期失败并返回剩余冷却秒数。调用方须已持有 _web_login_lock。"""
+    while _web_login_fails and now - _web_login_fails[0] > _WEB_AUTH_LOGIN_WINDOW:
+        _web_login_fails.pop(0)
+    if len(_web_login_fails) >= _WEB_AUTH_LOGIN_MAX_FAILS:
+        return max(
+            0.0,
+            _WEB_AUTH_LOGIN_COOLDOWN - (now - _web_login_fails[-1]),
+        )
+    return 0.0
+
+
+def _login_cooldown_remaining(now: float) -> float:
+    """返回登录冷却剩余秒数；0 表示当前不在冷却期。顺带清理过期记录。"""
+    with _web_login_lock:
+        return _prune_login_fails(now)
+
+
+def _register_login_fail(now: float) -> bool:
+    """记一次登录失败。窗口已满时不追加并返回 False，调用方应快速 429 而不是 sleep。"""
+    with _web_login_lock:
+        _prune_login_fails(now)
+        if len(_web_login_fails) >= _WEB_AUTH_LOGIN_MAX_FAILS:
+            return False
+        _web_login_fails.append(now)
+        return True
+
+
+def _reset_login_fails() -> None:
+    with _web_login_lock:
+        _web_login_fails.clear()
+
+
+WEB_LOGIN_HTML = r"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FOFATOTO - 访问鉴权</title>
+<style>
+:root{--primary-dark:#0f2440;--accent:#3182ce;--accent-hover:#2b6cb0;--accent-border:rgba(49,130,206,0.3);--bg:#e6e9ee;--card-bg:#fff;--text:#1a202c;--text-secondary:#64748b;--border:#d0d5dd;--danger:#dc2626}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);font-size:13px;line-height:1.5;min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:16px}
+.login-card{background:var(--card-bg);border:1px solid var(--border);border-left:3px solid var(--accent-border);border-radius:2px;padding:32px 28px;width:100%;max-width:340px;box-shadow:0 6px 24px rgba(15,36,64,0.08)}
+.login-title{font-size:17px;font-weight:700;letter-spacing:1.5px;color:var(--primary-dark);text-align:center}
+.login-sub{font-size:12px;color:var(--text-secondary);text-align:center;margin:6px 0 20px}
+.login-input{width:100%;padding:9px 12px;font-size:13px;border:1px solid var(--border);border-radius:2px;background:#fafbfc;color:var(--text);outline:none;transition:all 0.15s ease}
+.login-input:focus{border-color:var(--accent);background:#fff}
+.login-error{display:none;color:var(--danger);font-size:12px;margin:8px 0 0;word-break:break-all}
+.btn{display:block;width:100%;margin-top:16px;padding:9px 20px;font-size:13px;font-weight:600;border:1px solid var(--accent);border-radius:2px;cursor:pointer;background:var(--accent);color:#fff;transition:all 0.15s ease}
+.btn:hover{background:var(--accent-hover)}
+.btn:disabled{opacity:.65;cursor:not-allowed}
+.login-hint{font-size:11px;color:var(--text-secondary);margin-top:18px;text-align:center}
+.login-hint code{background:#f1f5f9;padding:1px 5px;border-radius:2px;font-family:"SF Mono","Fira Code",Consolas,Monaco,monospace;font-size:11px}
+</style>
+</head>
+<body>
+<div class="login-card">
+<div class="login-title">FOFATOTO</div>
+<div class="login-sub">Web UI 已开启访问鉴权，请输入访问密钥</div>
+<input type="password" class="login-input" id="secretInput" placeholder="访问密钥" autocomplete="off">
+<div class="login-error" id="loginError"></div>
+<button class="btn" id="loginBtn" onclick="submitLogin()">登录</button>
+<div class="login-hint">密钥在配置文件 <code>config.json</code> 的 <code>web_auth.secret</code> 中设置</div>
+</div>
+<script>
+function submitLogin(){var inp=document.getElementById("secretInput"),btn=document.getElementById("loginBtn"),err=document.getElementById("loginError"),v=inp.value;if(!v){err.textContent="请输入访问密钥";err.style.display="block";return}btn.disabled=true;btn.textContent="验证中...";err.style.display="none";fetch("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({secret:v})}).then(function(r){return r.json()}).then(function(data){if(data.success){location.href="/"}else{btn.disabled=false;btn.textContent="登录";err.textContent=data.error||"密钥错误";err.style.display="block";inp.select()}}).catch(function(e){btn.disabled=false;btn.textContent="登录";err.textContent="网络错误: "+e.message;err.style.display="block"})}
+document.addEventListener("DOMContentLoaded",function(){var inp=document.getElementById("secretInput");inp.addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();submitLogin()}});inp.focus()});
+</script>
+</body>
+</html>"""
+
+
 class FofaWebHandler(http.server.BaseHTTPRequestHandler):
     """FOFA Web UI 请求处理器"""
 
@@ -2977,9 +3130,16 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             peer = _web_peer_label(getattr(self, "client_address", None))
             _write_web_log(_format_web_access(method, target, "dropped", peer))
 
-    def _send_json(self, data: dict, status: int = 200):
+    def _send_json(
+        self,
+        data: dict,
+        status: int = 200,
+        extra_headers: Optional[list] = None,
+    ):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        for name, value in extra_headers or []:
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode("utf-8"))
 
@@ -3034,9 +3194,128 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             raise FofaAPIError(f"Invalid request body: {e}")
 
+    def _web_auth_enforced(self) -> bool:
+        """当前是否要求访问鉴权（每次调用重读配置，随 config.json 热更新）。"""
+        self.config_manager.load()
+        return self.config_manager.web_auth_enabled
+
+    def _request_auth_token(self) -> str:
+        """从 Cookie 头提取访问令牌；缺失或畸形返回空串。"""
+        try:
+            cookie = http.cookies.SimpleCookie()
+            cookie.load(self.headers.get("Cookie", "") or "")
+            morsel = cookie.get(WEB_AUTH_COOKIE_NAME)
+            return morsel.value if (morsel and morsel.value) else ""
+        except (http.cookies.CookieError, AttributeError):
+            return ""
+
+    def _request_authed(self) -> bool:
+        return verify_web_auth_token(
+            self._request_auth_token(), self.config_manager.web_auth_secret
+        )
+
+    def _web_auth_check(self, path: str) -> bool:
+        """访问鉴权门卫：需要拦截时已写好响应并返回 True，放行返回 False。
+
+        开启且未认证时，GET / 返回登录页，其余路径一律 401 JSON。
+        enabled 为 true 但 secret 为空时同样拒绝（失败封闭），
+        登录页会引导先在 config.json 配置密钥。
+        """
+        if not self._web_auth_enforced():
+            return False
+        if self._request_authed():
+            return False
+        if path == "/":
+            self._send_html(WEB_LOGIN_HTML)
+        else:
+            self._send_json(
+                {"success": False, "error": "未认证或认证已过期，请刷新页面重新登录"},
+                401,
+            )
+        return True
+
+    def _handle_login(self):
+        """POST /api/auth/login：验证访问密钥并签发鉴权 Cookie。"""
+        cm = self.config_manager
+        cm.load()
+        try:
+            body = self._read_body()
+        except FofaAPIError as e:
+            self._send_error(e, 401)
+            return
+        submitted = body.get("secret", "")
+        submitted = submitted if isinstance(submitted, str) else ""
+        if not cm.web_auth_enabled:
+            self._send_error("config.json 未开启 web_auth 访问鉴权", 401)
+            return
+        if not cm.web_auth_secret:
+            self._send_error(
+                "未配置访问密钥：请编辑 config.json 设置 web_auth.secret 后刷新重试",
+                401,
+                data={"config_path": str(cm.config_file)},
+            )
+            return
+        now = time.time()
+        remaining = _login_cooldown_remaining(now)
+        if remaining > 0:
+            # 冷却期快速拒绝：不比较、不睡眠，线程立即释放，
+            # 并行连接无法再逐请求占住线程。
+            self._send_json(
+                {
+                    "success": False,
+                    "error": f"登录尝试过于频繁，请约 {int(remaining) + 1} 秒后再试",
+                },
+                429,
+            )
+            return
+        if not secrets.compare_digest(
+            submitted.encode("utf-8"), cm.web_auth_secret.encode("utf-8")
+        ):
+            # 上面的冷却检查已经放开锁。并行失败会同时看到空窗口，必须在记账的
+            # 同一临界区里再次裁决：超额的不 sleep，避免占满线程。
+            if not _register_login_fail(now):
+                remaining = _login_cooldown_remaining(now)
+                self._send_json(
+                    {
+                        "success": False,
+                        "error": f"登录尝试过于频繁，请约 {int(remaining) + 1} 秒后再试",
+                    },
+                    429,
+                )
+                return
+            time.sleep(1)  # 仅未超额的失败停 1 秒；并行超额请求已在锁内改为 429
+            self._send_error("访问密钥错误", 401)
+            return
+        _reset_login_fails()  # 登录成功即清账，不把历史失败留给下一个合法用户
+        self._send_json(
+            {"success": True},
+            extra_headers=[
+                (
+                    "Set-Cookie",
+                    f"{WEB_AUTH_COOKIE_NAME}={generate_web_auth_token(cm.web_auth_secret)}; "
+                    f"Path=/; Max-Age={WEB_AUTH_TOKEN_TTL}; HttpOnly; SameSite=Strict",
+                )
+            ],
+        )
+
+    def _handle_logout(self):
+        """POST /api/auth/logout：清除鉴权 Cookie（幂等，未认证也可调用）。"""
+        self._send_json(
+            {"success": True},
+            extra_headers=[
+                (
+                    "Set-Cookie",
+                    f"{WEB_AUTH_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict",
+                )
+            ],
+        )
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
+
+        if self._web_auth_check(path):
+            return
 
         if path == "/":
             self._send_html(render_web_html())
@@ -3055,7 +3334,15 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
 
-        if path == "/api/search":
+        if path not in ("/api/auth/login", "/api/auth/logout"):
+            if self._web_auth_check(path):
+                return
+
+        if path == "/api/auth/login":
+            self._handle_login()
+        elif path == "/api/auth/logout":
+            self._handle_logout()
+        elif path == "/api/search":
             self._handle_search()
         elif path == "/api/icon":
             self._handle_icon()
@@ -3622,10 +3909,25 @@ class FofaWebServer:
         if is_wildcard:
             for ip in _lan_ips():
                 print(f"[*] 局域网访问: {CYAN}http://{ip}:{self.port}{RESET}")
-        if self.host not in ("127.0.0.1", "localhost", "::1"):
+        self.config_manager.load()
+        auth_active = (
+            self.config_manager.web_auth_enabled and self.config_manager.web_auth_secret
+        )
+        if self.config_manager.web_auth_enabled:
+            if auth_active:
+                print(
+                    f"{GREEN}[*] Web 访问鉴权已开启（密钥: config.json 的 web_auth.secret）{RESET}"
+                )
+            else:
+                print(
+                    f"{YELLOW}[!] web_auth 已开启但未设置密钥（web_auth.secret 为空），"
+                    f"任何访问密钥都无法登录，请先补充配置{RESET}"
+                )
+        if self.host not in ("127.0.0.1", "localhost", "::1") and not auth_active:
             print(
-                f"{YELLOW}[!] 监听地址为非回环地址，Web UI 无访问鉴权，"
-                f"局域网内任何人可访问并使用你的 FOFA 配额{RESET}"
+                f"{YELLOW}[!] 监听地址为非回环地址且访问鉴权未生效，"
+                f"局域网内任何人可访问并使用你的 FOFA 配额；"
+                f"建议在 config.json 开启 web_auth 访问鉴权{RESET}"
             )
         print(f"[*] 按 {RED}Ctrl+C{RESET} 停止服务器\n")
 

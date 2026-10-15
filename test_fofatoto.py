@@ -1660,6 +1660,10 @@ class UpdateCheckTest(unittest.TestCase):
         handler = fofatoto.FofaWebHandler.__new__(fofatoto.FofaWebHandler)
         sent = {}
         handler._send_json = lambda data, status=200: sent.update(json=data, status=status)
+        # do_GET 入口有访问鉴权门卫：需提供 config_manager（配置缺失 → 鉴权关闭）
+        with tempfile.TemporaryDirectory() as td:
+            handler.config_manager = fofatoto.ConfigManager()
+            handler.config_manager.config_file = Path(td) / "config.json"
         payload = {
             "current": fofatoto.APP_VERSION,
             "latest": "9.0.0",
@@ -1976,6 +1980,551 @@ class WebClientDisconnectTest(unittest.TestCase):
     def test_server_keeps_threading_defaults(self):
         self.assertTrue(fofatoto._FofaHTTPServer.daemon_threads)
         self.assertTrue(fofatoto._FofaHTTPServer.allow_reuse_address)
+
+
+class WebAuthTokenTest(unittest.TestCase):
+    """web_auth 令牌签发/校验：往返、密钥轮换、过期与畸形输入。"""
+
+    def test_roundtrip_accepts_ascii_and_unicode_secrets(self):
+        for secret in ("sec", "中文访问密钥", "with space"):
+            with self.subTest(secret=secret):
+                token = fofatoto.generate_web_auth_token(secret)
+                self.assertTrue(fofatoto.verify_web_auth_token(token, secret))
+
+    def test_other_secret_rejected(self):
+        token = fofatoto.generate_web_auth_token("sec")
+        self.assertFalse(fofatoto.verify_web_auth_token(token, "sec2"))
+
+    def test_token_expires_after_ttl(self):
+        now = 1700000000
+        with mock.patch.object(fofatoto.time, "time", return_value=now):
+            token = fofatoto.generate_web_auth_token("sec")
+        with mock.patch.object(
+            fofatoto.time, "time", return_value=now + fofatoto.WEB_AUTH_TOKEN_TTL - 1
+        ):
+            self.assertTrue(fofatoto.verify_web_auth_token(token, "sec"))
+        with mock.patch.object(
+            fofatoto.time, "time", return_value=now + fofatoto.WEB_AUTH_TOKEN_TTL
+        ):
+            self.assertFalse(fofatoto.verify_web_auth_token(token, "sec"))
+
+    def test_malformed_tokens_rejected(self):
+        good = fofatoto.generate_web_auth_token("sec")
+        signature = good.split(".", 1)[1]
+        bad = [
+            "",
+            "abc",
+            "no-dot-here",
+            ".",
+            "only.",
+            ".only",
+            "123.bad",
+            "12a.sig",
+            "x" * 64,
+            f"{'9' * 12}.{signature}",  # 超长时间戳
+            f"-5.{signature}",  # 负数不是无符号整数
+            f"٣.{signature}",  # 非 ASCII 数字同样拒绝
+            f"123.abc额外",  # 非纯 ASCII 签名
+        ]
+        for token in bad:
+            with self.subTest(token=token):
+                self.assertFalse(fofatoto.verify_web_auth_token(token, "sec"))
+        self.assertTrue(fofatoto.verify_web_auth_token(good, "sec"))
+
+    def test_empty_secret_rejects_everything(self):
+        # 空 secret 视为未配置：任何令牌都不放行（登录端点的失败封闭另一半）
+        token = fofatoto.generate_web_auth_token("later")
+        self.assertFalse(fofatoto.verify_web_auth_token(token, ""))
+        self.assertFalse(fofatoto.verify_web_auth_token("", ""))
+
+
+class WebAuthConfigTest(unittest.TestCase):
+    """config.json 的 web_auth 解析：缺失回退关闭、非法类型回退、公开状态。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.file = Path(self._tmp.name) / "config.json"
+
+    def _load(self, payload) -> fofatoto.ConfigManager:
+        self.file.write_text(json.dumps(payload), encoding="utf-8")
+        cm = fofatoto.ConfigManager()
+        cm.config_file = self.file
+        cm.load()
+        return cm
+
+    def test_missing_web_auth_disabled(self):
+        cm = self._load({"url": "https://fofa.info", "key": "k"})
+        self.assertFalse(cm.web_auth_enabled)
+        self.assertEqual(cm.web_auth_secret, "")
+
+    def test_web_auth_parsed(self):
+        cm = self._load(
+            {
+                "url": "https://fofa.info",
+                "key": "k",
+                "web_auth": {"enabled": True, "secret": "tok"},
+            }
+        )
+        self.assertTrue(cm.web_auth_enabled)
+        self.assertEqual(cm.web_auth_secret, "tok")
+
+    def test_non_dict_web_auth_falls_back_to_disabled(self):
+        for bad in (True, "yes", ["x"], 1):
+            with self.subTest(bad=bad):
+                cm = self._load({"web_auth": bad})
+                self.assertFalse(cm.web_auth_enabled)
+                self.assertEqual(cm.web_auth_secret, "")
+
+    def test_non_str_secret_emptied_but_flag_kept(self):
+        cm = self._load({"web_auth": {"enabled": True, "secret": 12345}})
+        self.assertTrue(cm.web_auth_enabled)
+        self.assertEqual(cm.web_auth_secret, "")
+
+    def test_enabled_defaults_to_false_when_absent(self):
+        cm = self._load({"web_auth": {"secret": "tok"}})
+        self.assertFalse(cm.web_auth_enabled)
+
+    def test_default_config_ships_web_auth_disabled(self):
+        self.assertEqual(
+            fofatoto.DEFAULT_CONFIG.get("web_auth"), {"enabled": False, "secret": ""}
+        )
+
+    def test_public_status_reports_flag_and_hides_secret(self):
+        cm = self._load(
+            {
+                "url": "https://fofa.info",
+                "key": "real-key",
+                "web_auth": {"enabled": True, "secret": "top-secret"},
+            }
+        )
+        status = cm.public_status()
+        # 鉴权开关供已登录前端控制「退出登录」入口；secret 永不进入公开状态
+        self.assertTrue(status["web_auth_enabled"])
+        self.assertIn("web_auth", status["config_template"])
+        self.assertNotIn("top-secret", json.dumps(status))
+
+
+class WebAuthGateTest(unittest.TestCase):
+    """FofaWebHandler._web_auth_check 门卫：登录页/401 分流、热更新与吊销。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.cm = fofatoto.ConfigManager()
+        self.cm.config_file = Path(self._tmp.name) / "config.json"
+
+    def _write_config(self, enabled, secret):
+        self.cm.config_file.write_text(
+            json.dumps(
+                {
+                    "url": "https://fofa.info",
+                    "key": "k",
+                    "web_auth": {"enabled": enabled, "secret": secret},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def _handler(self, cookie=None):
+        handler = fofatoto.FofaWebHandler.__new__(fofatoto.FofaWebHandler)
+        handler.config_manager = self.cm
+        handler.headers = {"Cookie": cookie} if cookie else {}
+        handler._send_json = mock.Mock()
+        handler._send_html = mock.Mock()
+        return handler
+
+    def test_disabled_passes_through(self):
+        self._write_config(False, "sec")
+        handler = self._handler()
+        self.assertFalse(handler._web_auth_check("/api/search"))
+        handler._send_json.assert_not_called()
+        handler._send_html.assert_not_called()
+
+    def test_api_rejected_with_401_json(self):
+        self._write_config(True, "sec")
+        handler = self._handler()
+        self.assertTrue(handler._web_auth_check("/api/search"))
+        handler._send_html.assert_not_called()
+        data, status = handler._send_json.call_args[0][:2]
+        self.assertEqual(status, 401)
+        self.assertFalse(data["success"])
+        self.assertIn("重新登录", data["error"])
+
+    def test_root_serves_login_page(self):
+        self._write_config(True, "sec")
+        handler = self._handler()
+        self.assertTrue(handler._web_auth_check("/"))
+        handler._send_json.assert_not_called()
+        handler._send_html.assert_called_once_with(fofatoto.WEB_LOGIN_HTML)
+
+    def test_valid_cookie_passes(self):
+        self._write_config(True, "sec")
+        cookie = f"{fofatoto.WEB_AUTH_COOKIE_NAME}={fofatoto.generate_web_auth_token('sec')}"
+        handler = self._handler(cookie=cookie)
+        self.assertFalse(handler._web_auth_check("/api/search"))
+        handler._send_json.assert_not_called()
+        handler._send_html.assert_not_called()
+
+    def test_secret_rotation_revokes_issued_token(self):
+        self._write_config(True, "old")
+        token = fofatoto.generate_web_auth_token("old")
+        self._write_config(True, "new")  # 热更新：改密钥即全员下线
+        handler = self._handler(cookie=f"{fofatoto.WEB_AUTH_COOKIE_NAME}={token}")
+        self.assertTrue(handler._web_auth_check("/api/search"))
+
+    def test_toggle_off_releases_gate_immediately(self):
+        self._write_config(True, "sec")
+        self.assertTrue(self._handler()._web_auth_check("/"))
+        self._write_config(False, "sec")
+        self.assertFalse(self._handler()._web_auth_check("/"))
+
+    def test_enabled_with_empty_secret_stays_closed(self):
+        self._write_config(True, "")
+        handler = self._handler(cookie="fofatoto_auth=whatever")
+        self.assertTrue(handler._web_auth_check("/"))
+
+    def test_garbage_cookies_rejected(self):
+        self._write_config(True, "sec")
+        cookies = (
+            None,
+            "other=value",
+            f"{fofatoto.WEB_AUTH_COOKIE_NAME}=garbage",
+            f"{fofatoto.WEB_AUTH_COOKIE_NAME}=123.abc",
+            f"{fofatoto.WEB_AUTH_COOKIE_NAME}=",
+            f"noise; {fofatoto.WEB_AUTH_COOKIE_NAME}=++; ok=1",
+        )
+        for cookie in cookies:
+            with self.subTest(cookie=cookie):
+                self.assertTrue(self._handler(cookie=cookie)._web_auth_check("/api/search"))
+
+
+class WebAuthLoginLogoutTest(unittest.TestCase):
+    """POST /api/auth/login 与 /api/auth/logout 端点契约（__new__ + mock 通道）"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.cm = fofatoto.ConfigManager()
+        self.cm.config_file = Path(self._tmp.name) / "config.json"
+        # 登录失败计数是进程级全局状态，用例间必须清零
+        fofatoto._web_login_fails.clear()
+
+    def _write_config(self, enabled, secret):
+        self.cm.config_file.write_text(
+            json.dumps(
+                {
+                    "url": "https://fofa.info",
+                    "key": "k",
+                    "web_auth": {"enabled": enabled, "secret": secret},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def _handler(self, body=None, body_error=None):
+        handler = fofatoto.FofaWebHandler.__new__(fofatoto.FofaWebHandler)
+        handler.config_manager = self.cm
+        if body_error is not None:
+            handler._read_body = mock.Mock(side_effect=body_error)
+        else:
+            handler._read_body = mock.Mock(return_value=body or {})
+        sent = {}
+
+        def fake_send_json(data, status=200, extra_headers=None):
+            sent.update(json=data, status=status, extra_headers=extra_headers)
+
+        def fake_send_error(error, status=200, data=None):
+            sent.update(error=error, status=status, data=data)
+
+        handler._send_json = mock.Mock(side_effect=fake_send_json)
+        handler._send_error = mock.Mock(side_effect=fake_send_error)
+        return handler, sent
+
+    @staticmethod
+    def _issued_token(sent) -> str:
+        headers = sent.get("extra_headers") or []
+        cookie = next((v for k, v in headers if k == "Set-Cookie"), None)
+        return cookie.split("=", 1)[1].split(";", 1)[0]
+
+    def test_success_sets_secure_cookie(self):
+        self._write_config(True, "sec")
+        handler, sent = self._handler({"secret": "sec"})
+        with mock.patch.object(fofatoto.time, "sleep") as msleep:
+            handler._handle_login()
+        msleep.assert_not_called()
+        handler._send_error.assert_not_called()
+        self.assertTrue(sent["json"]["success"])
+        cookie = next(
+            v for k, v in (sent["extra_headers"] or []) if k == "Set-Cookie"
+        )
+        self.assertIn(f"{fofatoto.WEB_AUTH_COOKIE_NAME}=", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+        self.assertIn(f"Max-Age={fofatoto.WEB_AUTH_TOKEN_TTL}", cookie)
+        self.assertTrue(
+            fofatoto.verify_web_auth_token(self._issued_token(sent), "sec")
+        )
+
+    def test_wrong_secret_delayed_and_rejected(self):
+        self._write_config(True, "sec")
+        handler, sent = self._handler({"secret": "nope"})
+        with mock.patch.object(fofatoto.time, "sleep") as msleep:
+            handler._handle_login()
+        msleep.assert_called_once_with(1)
+        handler._send_json.assert_not_called()
+        self.assertEqual(sent["error"], "访问密钥错误")
+        self.assertEqual(sent["status"], 401)
+
+    def test_empty_configured_secret_guides_user(self):
+        self._write_config(True, "")
+        handler, sent = self._handler({"secret": "whatever"})
+        with mock.patch.object(fofatoto.time, "sleep"):
+            handler._handle_login()
+        handler._send_json.assert_not_called()
+        self.assertEqual(sent["status"], 401)
+        self.assertIn("web_auth.secret", str(sent["error"]))
+        self.assertEqual(sent["data"]["config_path"], str(self.cm.config_file))
+
+    def test_auth_disabled_login_rejected(self):
+        self._write_config(False, "sec")
+        handler, sent = self._handler({"secret": "sec"})
+        with mock.patch.object(fofatoto.time, "sleep"):
+            handler._handle_login()
+        handler._send_json.assert_not_called()
+        self.assertIn("未开启", str(sent["error"]))
+        self.assertEqual(sent["status"], 401)
+
+    def test_non_string_secret_treated_as_empty(self):
+        self._write_config(True, "sec")
+        handler, sent = self._handler({"secret": 123})
+        with mock.patch.object(fofatoto.time, "sleep") as msleep:
+            handler._handle_login()
+        msleep.assert_called_once_with(1)
+        self.assertEqual(sent["error"], "访问密钥错误")
+
+    def test_unicode_secret_roundtrip(self):
+        # 非 ASCII 密钥必须可用：比较与签名均按 bytes 处理
+        self._write_config(True, "中文访问密钥")
+        handler, sent = self._handler({"secret": "中文访问密钥"})
+        with mock.patch.object(fofatoto.time, "sleep"):
+            handler._handle_login()
+        handler._send_error.assert_not_called()
+        self.assertTrue(
+            fofatoto.verify_web_auth_token(self._issued_token(sent), "中文访问密钥")
+        )
+
+    def test_invalid_body_rejected_with_401(self):
+        self._write_config(True, "sec")
+        handler, sent = self._handler(
+            body_error=fofatoto.FofaAPIError("Invalid request body: boom")
+        )
+        handler._handle_login()
+        handler._send_json.assert_not_called()
+        self.assertEqual(sent["status"], 401)
+
+    def test_logout_clears_cookie(self):
+        handler, sent = self._handler()
+        handler._handle_logout()
+        self.assertTrue(sent["json"]["success"])
+        cookie = next(
+            v for k, v in (sent["extra_headers"] or []) if k == "Set-Cookie"
+        )
+        self.assertIn(f"{fofatoto.WEB_AUTH_COOKIE_NAME}=", cookie)
+        self.assertIn("Max-Age=0", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+
+
+class WebAuthLoginRateLimitTest(unittest.TestCase):
+    """登录失败全局限流：滑动窗口、冷却快速拒绝、成功清账。"""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.cm = fofatoto.ConfigManager()
+        self.cm.config_file = Path(self._tmp.name) / "config.json"
+        self._write_config(True, "sec")
+        fofatoto._web_login_fails.clear()
+
+    def _write_config(self, enabled, secret):
+        self.cm.config_file.write_text(
+            json.dumps(
+                {
+                    "url": "https://fofa.info",
+                    "key": "k",
+                    "web_auth": {"enabled": enabled, "secret": secret},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def _handler(self, body):
+        handler = fofatoto.FofaWebHandler.__new__(fofatoto.FofaWebHandler)
+        handler.config_manager = self.cm
+        handler._read_body = mock.Mock(return_value=body)
+        sent = {}
+        handler._send_json = mock.Mock(
+            side_effect=lambda data, status=200, extra_headers=None: sent.update(
+                json=data, status=status, extra_headers=extra_headers
+            )
+        )
+        handler._send_error = mock.Mock(
+            side_effect=lambda error, status=200, data=None: sent.update(
+                error=error, status=status, data=data
+            )
+        )
+        return handler, sent
+
+    def _frozen_clock(self, start=1700000000.0):
+        state = {"now": start}
+        clock = mock.patch.object(fofatoto.time, "time", side_effect=lambda: state["now"])
+        return clock, state
+
+    def test_window_allows_threshold_then_fast_reject(self):
+        limit = fofatoto._WEB_AUTH_LOGIN_MAX_FAILS
+        clock, _ = self._frozen_clock()
+        with clock, mock.patch.object(fofatoto.time, "sleep") as msleep:
+            for i in range(limit):
+                handler, sent = self._handler({"secret": "wrong"})
+                handler._handle_login()
+                self.assertEqual(
+                    sent["status"], 401, f"attempt #{i} should pass"
+                )
+            self.assertEqual(msleep.call_count, limit)
+            # 超过阈值：进入冷却，快速拒绝，不再 sleep
+            handler, sent = self._handler({"secret": "wrong"})
+            handler._handle_login()
+            self.assertEqual(sent["status"], 429)
+            self.assertIn("过于频繁", sent["json"]["error"])
+            self.assertFalse(sent["json"]["success"])
+            self.assertEqual(msleep.call_count, limit)
+
+    def test_correct_secret_rejected_during_cooldown(self):
+        limit = fofatoto._WEB_AUTH_LOGIN_MAX_FAILS
+        clock, state = self._frozen_clock()
+        with clock, mock.patch.object(fofatoto.time, "sleep"):
+            for _ in range(limit):
+                handler, _ = self._handler({"secret": "wrong"})
+                handler._handle_login()
+            # 冷却期内连正确密钥也拒，剩余秒数进入文案
+            handler, sent = self._handler({"secret": "sec"})
+            handler._handle_login()
+            self.assertEqual(sent["status"], 429)
+            self.assertIn("秒后再试", sent["json"]["error"])
+
+    def test_cooldown_expires_when_window_slides(self):
+        base = 1700000000.0
+        for _ in range(fofatoto._WEB_AUTH_LOGIN_MAX_FAILS):
+            fofatoto._register_login_fail(base)
+        self.assertGreater(
+            fofatoto._login_cooldown_remaining(base + 1),
+            0,
+        )
+        # 冷却时长结束后窗口记录滑出，不再拒绝
+        self.assertEqual(
+            fofatoto._login_cooldown_remaining(
+                base + fofatoto._WEB_AUTH_LOGIN_COOLDOWN + 0.001
+            ),
+            0.0,
+        )
+
+    def test_success_resets_fail_counter(self):
+        clock, state = self._frozen_clock()
+        with clock, mock.patch.object(fofatoto.time, "sleep"):
+            for _ in range(fofatoto._WEB_AUTH_LOGIN_MAX_FAILS - 1):
+                handler, _ = self._handler({"secret": "wrong"})
+                handler._handle_login()
+            handler, sent = self._handler({"secret": "sec"})
+            handler._handle_login()
+            self.assertTrue(sent["json"]["success"])
+            self.assertEqual(fofatoto._login_cooldown_remaining(state["now"]), 0.0)
+            self.assertEqual(list(fofatoto._web_login_fails), [])
+
+    def test_disabled_and_unconfigured_rejects_do_not_count(self):
+        clock, state = self._frozen_clock()
+        with clock, mock.patch.object(fofatoto.time, "sleep") as msleep:
+            self._write_config(False, "sec")
+            handler, _ = self._handler({"secret": "whatever"})
+            handler._handle_login()
+            self._write_config(True, "")
+            handler, _ = self._handler({"secret": "whatever"})
+            handler._handle_login()
+            self.assertEqual(list(fofatoto._web_login_fails), [])
+            msleep.assert_not_called()
+
+    def test_parallel_burst_sleeps_only_up_to_cap(self):
+        # 冷却检查与记账若分两次加锁，并行失败会同时看到空窗口并全部 sleep。
+        # 先把所有请求挡在第一次检查返回之前，迫使它们一起冲过检查再记账。
+        extra = 8
+        n = fofatoto._WEB_AUTH_LOGIN_MAX_FAILS + extra
+        entered = threading.Barrier(n)
+        real_cooldown = fofatoto._login_cooldown_remaining
+        wave = {"open": False}
+
+        def cooldown(now):
+            result = real_cooldown(now)
+            if not wave["open"]:
+                entered.wait(timeout=5)
+                wave["open"] = True
+            return result
+
+        statuses = []
+        status_lock = threading.Lock()
+
+        def attempt():
+            handler, sent = self._handler({"secret": "wrong"})
+            handler._handle_login()
+            with status_lock:
+                statuses.append(sent["status"])
+
+        with (
+            mock.patch.object(
+                fofatoto, "_login_cooldown_remaining", side_effect=cooldown
+            ),
+            mock.patch.object(fofatoto.time, "sleep") as msleep,
+        ):
+            threads = [threading.Thread(target=attempt) for _ in range(n)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=5)
+            self.assertTrue(all(not thread.is_alive() for thread in threads))
+            self.assertEqual(msleep.call_count, fofatoto._WEB_AUTH_LOGIN_MAX_FAILS)
+            msleep.assert_called_with(1)
+
+        self.assertEqual(statuses.count(401), fofatoto._WEB_AUTH_LOGIN_MAX_FAILS)
+        self.assertEqual(statuses.count(429), extra)
+        self.assertEqual(
+            len(fofatoto._web_login_fails), fofatoto._WEB_AUTH_LOGIN_MAX_FAILS
+        )
+
+
+class WebAuthLoginTemplateTest(unittest.TestCase):
+    """登录页与主页面的静态断言。"""
+
+    def test_login_page_wires_form_without_placeholders(self):
+        html = fofatoto.WEB_LOGIN_HTML
+        self.assertIn('id="secretInput"', html)
+        self.assertIn("/api/auth/login", html)
+        self.assertIn("web_auth.secret", html)
+        self.assertNotRegex(html, r"__[A-Za-z]+__")
+
+    def test_main_ui_wires_conditional_logout_and_right_opening_settings(self):
+        html = fofatoto.render_web_html()
+        self.assertIn('id="logoutBtn"', html)
+        self.assertIn('onclick="logoutWebAuth()"', html)
+        self.assertIn("function logoutWebAuth()", html)
+        self.assertIn("toggleLogoutItem(!!d.web_auth_enabled)", html)
+        # 设置弹窗锚定左缘向右展开（此前 right:0 向左铺开不直观）
+        self.assertIn(
+            "settings-popup{display:none;position:absolute;top:100%;left:0;", html
+        )
+        self.assertNotIn(
+            "settings-popup{display:none;position:absolute;top:100%;right:0", html
+        )
+
+    def test_token_ttl_is_thirty_days(self):
+        self.assertEqual(fofatoto.WEB_AUTH_TOKEN_TTL, 30 * 86400)
 
 
 if __name__ == "__main__":

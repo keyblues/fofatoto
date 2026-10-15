@@ -4,7 +4,14 @@
 
 ## Unreleased
 
+### 新增
+- **Web UI 访问鉴权**：`config.json` 新增 `web_auth`（`enabled` 开关 + `secret` 访问密钥，默认关闭，不影响 CLI）。开启后浏览器先进入内嵌中文登录页，登录成功签发 HMAC-SHA256 签名的 `HttpOnly` / `SameSite=Strict` Cookie（30 天有效，无服务端会话存储），所有页面与 API（含导出下载）均需有效 Cookie。密钥比较恒时；登录失败有全局滑动窗口限流（60 秒内 5 次失败后 60 秒冷却期，冷却中快速返回 429，防并行爆破且不占服务线程，登录成功即清零计数）；修改 `secret` 下一个请求即吊销全部已签发 Cookie，`enabled` 改 `false` 即恢复无鉴权（随配置热更新）。`enabled=true` 但 `secret` 为空时失败封闭：任何密钥都无法登录，登录页与启动横幅提示补配置。已登录时设置弹窗底部出现「退出登录」；非回环监听的启动警告改为提示开启本功能；新增 `POST /api/auth/login`、`POST /api/auth/logout` 端点（含登录限流 429 审计）；README 补充明文 HTTP 场景的嗅探风险与吊销指引；`config.example.json` 与自动生成的配置模板同步加入 `web_auth` 示例。
+
+### 优化
+- 设置弹窗改为锚定「设置」按钮左缘向右展开（原先 `right:0` 对齐右缘、内容向左铺开，不直观），窄窗口下限宽兜底防止溢出。
+
 ### 修复
+- 登录限流先放开锁再比对密钥、失败后另一次加锁记账。并行的错误登录会同时看到空窗口，全部 `sleep(1)`，突破 5 次上限并占满 Web 线程。现在是否计入失败与是否休眠在同一把锁里决定，超额请求直接 429，不再占用线程。
 - stdout 非 TTY 时（Docker 容器、重定向日志）Python 默认块缓冲，启动横幅和 Web 启动信息滞留在缓冲区，`docker logs` 只能看到 stderr 的访问日志、ASCII 横幅缺失。`main()` 入口把非 TTY 的 stdout 改为行缓冲，stdout 与 stderr 按时间顺序出现。
 - Web UI 客户端提前断开连接（刷新页面、探活探测、代理掐断）不再刷整段 `BrokenPipeError` traceback，安静关闭连接并只记一行 `dropped` 访问日志；服务器层其余意外异常也压缩为单行，不再输出 socketserver 的完整回溯。访问日志的状态列补齐到固定宽度（数字状态码 3 位、`dropped` 7 位），带来源地址的各行 IP 落在同一列。已记录过状态码的请求（`send_response` 在头部阶段已记过日志，断开发生在响应正文/flush 阶段）不再补 `dropped`，同一请求只保留一行。
 - `--dedup` 中不在 `-f` 里的字段按 `--dedup` 的顺序追加。这些字段会进入 FOFA 的 `fields` 参数和 CSV 表头；原先用集合收集，两个及以上缺失字段的顺序会随进程变化。例如 `-f ip,port --dedup ip,host,domain` 固定得到 `ip,port,host,domain`。
