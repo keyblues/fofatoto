@@ -1332,9 +1332,53 @@ class ResolveIconTest(unittest.TestCase):
         self.assertEqual(info["icon_bytes"], self.PNG)
 
     def test_unsupported_scheme(self):
-        with self.assertRaises(fofatoto.IconExtractError) as cm:
-            self._run("ftp://example.com/x.ico", {}, allow_file=False)
-        self.assertIn("仅支持 http/https", str(cm.exception))
+        cases = (
+            ("ftp://user:secret@example.com/hidden.ico", "ftp://example.com", ("secret", "hidden", "user:", "仅支持")),
+            ("file:///etc/passwd", "file://", ("passwd", "etc", "仅支持")),
+        )
+        for target, redacted, leaked in cases:
+            with self.subTest(target=target):
+                stderr = io.StringIO()
+                with mock.patch.object(sys, "stderr", stderr):
+                    with self.assertRaises(fofatoto.IconExtractError) as cm:
+                        self._run(target, {}, allow_file=False)
+                msg = str(cm.exception)
+                self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+                for piece in leaked:
+                    self.assertNotIn(piece, msg)
+                self.assertNotIn(target, msg)
+                log = stderr.getvalue()
+                self.assertIn("(bad-scheme)", log)
+                self.assertIn(redacted, log)
+                for piece in leaked:
+                    self.assertNotIn(piece, log)
+
+        target = "ftp://user:secret@example.com/hidden.ico"
+        args = mock.Mock()
+        args.icon = target
+        stderr = io.StringIO()
+        with mock.patch.object(sys, "stderr", stderr):
+            with self.assertRaises(SystemExit) as cm:
+                fofatoto.handle_icon_mode(mock.Mock(), args)
+        self.assertEqual(cm.exception.code, 1)
+        text = stderr.getvalue()
+        self.assertIn(fofatoto._ICON_FETCH_FAIL, text)
+        self.assertIn("(bad-scheme)", text)
+        self.assertIn("ftp://example.com", text)
+        self.assertNotIn("secret", text)
+        self.assertNotIn("hidden", text)
+        self.assertNotIn("仅支持", text)
+
+        handler, sent = ApiIconEndpointTest._handler({"target": target})
+        fofatoto._ICON_CACHE.clear()
+        try:
+            handler._handle_icon()
+        finally:
+            fofatoto._ICON_CACHE.clear()
+        self.assertEqual(str(sent["error"]), fofatoto._ICON_FETCH_FAIL)
+        self.assertNotIn("secret", str(sent["error"]))
+        self.assertNotIn("hidden", str(sent["error"]))
+        self.assertNotIn("ftp://", str(sent["error"]))
 
     def test_allow_file_false_never_reads_local(self):
         with tempfile.NamedTemporaryFile(suffix=".ico", delete=False) as fh:
@@ -1349,8 +1393,13 @@ class ResolveIconTest(unittest.TestCase):
                 mock.patch.object(socket, "getaddrinfo", _fake_icon_getaddrinfo()),
                 mock.patch.object(urllib.request, "urlopen", fake_urlopen),
             ):
-                with self.assertRaises(fofatoto.IconExtractError):
+                with self.assertRaises(fofatoto.IconExtractError) as cm:
                     fofatoto.resolve_icon(path, allow_file=False)
+            msg = str(cm.exception)
+            self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+            self.assertNotIn(path, msg)
+            self.assertNotIn("https://", msg)
+            self.assertNotIn("http://", msg)
         finally:
             os.unlink(path)
 
@@ -1367,21 +1416,61 @@ class ResolveIconTest(unittest.TestCase):
         self.assertNotIn("域名解析失败", msg)
 
     def test_direct_image_uses_icon_limit_html_uses_html_limit(self):
-        # PR #2 复核意见：2–5MB 直接图片按图标上限放行，HTML 单独施加小上限
+        # PR #2 复核意见：2–5MB 直接图片按图标上限放行，HTML 单独施加小上限。
+        # 超限对调用方只有「图标抓取失败」，不回页面地址或跳转后的地址。
         big_img = b"\x89PNG\r\n\x1a\n" + b"x" * 150
         big_html = b"<html>" + b"y" * 150 + b"</html>"
         routes = {
             "https://example.com/img.png": FakeHTTPResponse(big_img, "https://example.com/img.png", "image/png"),
             "https://example.com/page": FakeHTTPResponse(big_html, "https://example.com/page", "text/html"),
         }
+        secret = "https://user:s3cret@cdn.example/private/page?token=abc"
+        redirected = {
+            "https://example.com/start": FakeHTTPResponse(
+                b"",
+                "https://example.com/start",
+                status=302,
+                headers={"Location": secret},
+            ),
+            secret: FakeHTTPResponse(big_html, secret, "text/html"),
+        }
         with mock.patch.object(fofatoto, "_MAX_HTML_BYTES", 100), mock.patch.object(
             fofatoto, "_MAX_ICON_BYTES", 1000
         ):
             info = self._run("https://example.com/img.png", routes)
             self.assertEqual(info["icon_size"], len(big_img))
-            with self.assertRaises(fofatoto.IconExtractError) as cm:
-                self._run("https://example.com/page", routes)
-            self.assertIn("HTML 响应超过大小上限", str(cm.exception))
+            stderr = io.StringIO()
+            with mock.patch.object(sys, "stderr", stderr):
+                with self.assertRaises(fofatoto.IconExtractError) as cm:
+                    self._run("https://example.com/page", routes)
+            msg = str(cm.exception)
+            self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+            self.assertNotIn("example.com", msg)
+            self.assertNotIn("page", msg)
+            self.assertNotIn("HTML", msg)
+            self.assertNotIn("超过大小上限", msg)
+            log = stderr.getvalue()
+            self.assertIn("(html-size)", log)
+            self.assertIn("https://example.com", log)
+            self.assertNotIn("/page", log)
+
+            stderr = io.StringIO()
+            with mock.patch.object(sys, "stderr", stderr):
+                with self.assertRaises(fofatoto.IconExtractError) as cm:
+                    self._run(
+                        "https://example.com/start",
+                        redirected,
+                        dns={"example.com": "93.184.216.34", "cdn.example": "93.184.216.34"},
+                    )
+            msg = str(cm.exception)
+            self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+            log = stderr.getvalue()
+            for leaked in ("s3cret", "private", "token", "user:", "cdn.example", "超过大小上限"):
+                self.assertNotIn(leaked, msg)
+            self.assertIn("(html-size)", log)
+            self.assertIn("https://cdn.example", log)
+            for leaked in ("s3cret", "private", "token", "user:", "/private", "token"):
+                self.assertNotIn(leaked, log)
 
     def test_icon_fetch_limit_enforced(self):
         huge = b"\x00\x00\x01\x00" + b"x" * 200
@@ -1437,31 +1526,73 @@ class ResolveIconTest(unittest.TestCase):
     def test_html_parse_error_surfaced_in_final_error(self):
         class BoomParser(fofatoto._IconLinkParser):
             def feed(self, data):
-                raise ValueError("boom")
+                raise ValueError("boom at https://user:s3cret@cdn.example/private")
 
+        page = "https://user:s3cret@example.com/private/page"
+        favicon = "https://user:s3cret@example.com/favicon.ico"
         routes = {
-            "https://example.com": FakeHTTPResponse(b"<html>x</html>", "https://example.com/", "text/html"),
-            "https://example.com/favicon.ico": urllib.error.HTTPError(
-                "https://example.com/favicon.ico", 404, "Not Found", None, None
-            ),
+            page: FakeHTTPResponse(b"<html>x</html>", page, "text/html"),
+            favicon: urllib.error.HTTPError(favicon, 404, "Not Found", None, None),
         }
-        with mock.patch.object(fofatoto, "_IconLinkParser", BoomParser):
+        stderr = io.StringIO()
+        with mock.patch.object(fofatoto, "_IconLinkParser", BoomParser), mock.patch.object(sys, "stderr", stderr):
             with self.assertRaises(fofatoto.IconExtractError) as cm:
-                self._run("https://example.com", routes)
+                self._run(page, routes)
         msg = str(cm.exception)
-        self.assertIn("HTML 解析失败", msg)
-        self.assertIn("boom", msg)
+        self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+        for leaked in ("boom", "s3cret", "private", "example.com", "favicon", "HTML 解析失败", "页面未找到"):
+            self.assertNotIn(leaked, msg)
+        log = stderr.getvalue()
+        self.assertIn("(html-parse)", log)
+        self.assertIn("https://example.com", log)
+        for leaked in ("boom", "s3cret", "private", "favicon.ico"):
+            self.assertNotIn(leaked, log)
+
+    def test_missing_icon_error_hides_page_url(self):
+        # 页面没有 icon，回退 /favicon.ico 也失败时，不回「页面未找到可用图标」和地址
+        page = "https://user:s3cret@example.com/private/page"
+        favicon = "https://user:s3cret@example.com/favicon.ico"
+        routes = {
+            page: FakeHTTPResponse(b"<html>no icon</html>", page, "text/html"),
+            favicon: urllib.error.HTTPError(favicon, 404, "Not Found", None, None),
+        }
+        stderr = io.StringIO()
+        with mock.patch.object(sys, "stderr", stderr):
+            with self.assertRaises(fofatoto.IconExtractError) as cm:
+                self._run(page, routes)
+        msg = str(cm.exception)
+        self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+        for leaked in ("s3cret", "private", "example.com", "favicon", "页面未找到"):
+            self.assertNotIn(leaked, msg)
+        log = stderr.getvalue()
+        self.assertIn("(http-status)", log)
+        self.assertIn("https://example.com", log)
+        self.assertNotIn("s3cret", log)
+        self.assertNotIn("private", log)
+        self.assertNotIn("favicon.ico", log)
 
     def test_empty_icon_response_rejected(self):
-        # /favicon.ico 返回 200 空体时按失败处理，不产出空字节哈希
+        # /favicon.ico 返回 200 空体时按失败处理，不产出空字节哈希，也不回地址
+        page = "https://user:s3cret@example.com/private/page"
+        favicon = "https://user:s3cret@example.com/favicon.ico"
         routes = {
-            "https://example.com": FakeHTTPResponse(b"<html>no icon</html>", "https://example.com/", "text/html"),
-            "https://example.com/favicon.ico": FakeHTTPResponse(b"", "https://example.com/favicon.ico", "image/x-icon"),
+            page: FakeHTTPResponse(b"<html>no icon</html>", page, "text/html"),
+            favicon: FakeHTTPResponse(b"", favicon, "image/x-icon"),
         }
-        with self.assertRaises(fofatoto.IconExtractError) as cm:
-            self._run("https://example.com", routes)
-        self.assertIn("页面未找到可用图标", str(cm.exception))
-        self.assertIn("图标响应为空", str(cm.exception))
+        stderr = io.StringIO()
+        with mock.patch.object(sys, "stderr", stderr):
+            with self.assertRaises(fofatoto.IconExtractError) as cm:
+                self._run(page, routes)
+        msg = str(cm.exception)
+        self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+        for leaked in ("s3cret", "private", "example.com", "favicon", "图标响应为空", "页面未找到"):
+            self.assertNotIn(leaked, msg)
+        log = stderr.getvalue()
+        self.assertIn("(empty)", log)
+        self.assertIn("https://example.com", log)
+        self.assertNotIn("s3cret", log)
+        self.assertNotIn("private", log)
+        self.assertNotIn("favicon.ico", log)
 
     def test_timeout_error_classified(self):
         routes = {"https://slow.example": socket.timeout("timed out")}
@@ -1946,11 +2077,11 @@ class ApiIconEndpointTest(unittest.TestCase):
     def test_extract_error_maps_to_error_response(self):
         handler, sent = self._handler({"target": "does-not-exist.example"})
         with mock.patch.object(
-            fofatoto, "resolve_icon_cached", side_effect=fofatoto.IconExtractError("页面未找到可用图标")
+            fofatoto, "resolve_icon_cached", side_effect=fofatoto.IconExtractError(fofatoto._ICON_FETCH_FAIL)
         ):
             handler._handle_icon()
         handler._send_json.assert_not_called()
-        self.assertIn("页面未找到可用图标", str(sent["error"]))
+        self.assertEqual(str(sent["error"]), fofatoto._ICON_FETCH_FAIL)
 
     def test_unexpected_exception_still_answers(self):
         handler, sent = self._handler({"target": "https://example.com"})
@@ -1977,6 +2108,8 @@ class ApiIconEndpointTest(unittest.TestCase):
                 handler._handle_icon()
             handler._send_json.assert_not_called()
             self.assertIsInstance(sent["error"], fofatoto.IconExtractError)
+            self.assertEqual(str(sent["error"]), fofatoto._ICON_FETCH_FAIL)
+            self.assertNotIn(path, str(sent["error"]))
             self.assertNotIn("local-secret", str(sent["error"]))
         finally:
             os.unlink(path)
