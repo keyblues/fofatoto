@@ -2968,6 +2968,89 @@ class WebAuthGateTest(unittest.TestCase):
                 self.assertTrue(self._handler(cookie=cookie)._web_auth_check("/api/search"))
 
 
+class WebAuthHandlerRouteTest(unittest.TestCase):
+    """do_GET / do_POST 入口必须调用鉴权门卫。
+
+    WebAuthGateTest 只直接调用 _web_auth_check。删掉 do_GET/do_POST 里的
+    门卫后那些用例仍绿；这里走真实入口：未带 Cookie 的受保护路由必须 401
+    且不得进入业务处理，登录/退出白名单仍可达，有效 Cookie 放行。
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.cm = fofatoto.ConfigManager()
+        self.cm.config_file = Path(self._tmp.name) / "config.json"
+        self.cm.config_file.write_text(
+            json.dumps(
+                {
+                    "url": "https://fofa.info",
+                    "key": "k",
+                    "web_auth": {"enabled": True, "secret": "sec"},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def _handler(self, path, cookie=None):
+        handler = fofatoto.FofaWebHandler.__new__(fofatoto.FofaWebHandler)
+        handler.config_manager = self.cm
+        handler.path = path
+        handler.headers = {"Cookie": cookie} if cookie else {}
+        handler._send_json = mock.Mock()
+        handler._send_html = mock.Mock()
+        return handler
+
+    def _assert_unauthorized(self, handler):
+        handler._send_html.assert_not_called()
+        data, status = handler._send_json.call_args[0][:2]
+        self.assertEqual(status, 401)
+        self.assertFalse(data["success"])
+        self.assertIn("重新登录", data["error"])
+
+    def test_post_search_without_cookie_is_401(self):
+        handler = self._handler("/api/search")
+        handler._handle_search = mock.Mock()
+        handler.do_POST()
+        handler._handle_search.assert_not_called()
+        self._assert_unauthorized(handler)
+
+    def test_get_update_without_cookie_is_401(self):
+        handler = self._handler("/api/update")
+        handler._handle_update = mock.Mock()
+        handler.do_GET()
+        handler._handle_update.assert_not_called()
+        self._assert_unauthorized(handler)
+
+    def test_post_login_reaches_handler_without_cookie(self):
+        handler = self._handler("/api/auth/login")
+        handler._handle_login = mock.Mock()
+        handler.do_POST()
+        handler._handle_login.assert_called_once()
+        handler._send_json.assert_not_called()
+        handler._send_html.assert_not_called()
+
+    def test_post_logout_reaches_handler_without_cookie(self):
+        handler = self._handler("/api/auth/logout")
+        handler._handle_logout = mock.Mock()
+        handler.do_POST()
+        handler._handle_logout.assert_called_once()
+        handler._send_json.assert_not_called()
+        handler._send_html.assert_not_called()
+
+    def test_valid_cookie_reaches_post_icon(self):
+        cookie = (
+            f"{fofatoto.WEB_AUTH_COOKIE_NAME}="
+            f"{fofatoto.generate_web_auth_token('sec')}"
+        )
+        handler = self._handler("/api/icon", cookie=cookie)
+        handler._handle_icon = mock.Mock()
+        handler.do_POST()
+        handler._handle_icon.assert_called_once()
+        handler._send_json.assert_not_called()
+        handler._send_html.assert_not_called()
+
+
 class WebAuthLoginLogoutTest(unittest.TestCase):
     """POST /api/auth/login 与 /api/auth/logout 端点契约（__new__ + mock 通道）"""
 

@@ -44,6 +44,7 @@
 - AGENTS.md 测试计数由 146 更正为 157，与当前 `test_fofatoto` 套件一致（含客户端断开 `dropped` 日志、断开不重复记账与状态列对齐用例）；构建依赖说明与 README 的本地编译准备对齐。
 
 ### 其他
+- 单元测试补上 `do_GET` / `do_POST` 入口的访问鉴权：开启 `web_auth` 后，未带 Cookie 的 `POST /api/search` 与 `GET /api/update` 返回 401 且不进入业务处理；`POST /api/auth/login`、`POST /api/auth/logout` 仍到达处理函数；有效 Cookie 的 `POST /api/icon` 放行。只调用 `_web_auth_check` 的用例删不掉这两处门卫。AGENTS.md 测试计数改为 226。
 - 深度导出与批量任务结束时不再把终态文案写入 `message`。面板在 `done` / `error` 后自行生成文字（按 `partial`/`fetched`，或改用 `error`），进行中的 `task.message` 仍会显示。
 - 去掉只写不读、或写出后立刻被覆盖的状态：`Exporter.fields_str`；icon 结果里的 `target` / `content_type` 以及只为填它们的返回位（`_guess_content_type` / `_looks_like_icon` 仍用来判断是不是图标）；中转用量里写死的 `vip_level`；`ConfigManager.last_error` 和 `public_status()` 的 `error`；批量查询未使用的行号（改为 `list[str]`）；`export_results` 在调用方已默认 CSV 时走不到的空格式分支；Web 进度回调里被紧接着的 `done` 盖掉的 `error_partial` / `interrupted`（命令行仍打印这两类事件）；按签名缓存的无状态 `FofaClient`。`/api/search` 改为使用门槛刚加载的 client，同一次请求不再读第二遍配置。导出和批量任务线程里的 `get_client()` 仍留在 try 中。
 - 单元测试收紧去重：相同 `build_url` 仍合并，不同键必须留下；可中断休眠改为 mock `time.sleep`；导出夹具改用 `TemporaryDirectory`。
