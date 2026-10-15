@@ -2452,6 +2452,52 @@ class WebAuthLoginRateLimitTest(unittest.TestCase):
             self.assertEqual(list(fofatoto._web_login_fails), [])
             msleep.assert_not_called()
 
+    def test_parallel_burst_sleeps_only_up_to_cap(self):
+        # 冷却检查与记账若分两次加锁，并行失败会同时看到空窗口并全部 sleep。
+        # 先把所有请求挡在第一次检查返回之前，迫使它们一起冲过检查再记账。
+        extra = 8
+        n = fofatoto._WEB_AUTH_LOGIN_MAX_FAILS + extra
+        entered = threading.Barrier(n)
+        real_cooldown = fofatoto._login_cooldown_remaining
+        wave = {"open": False}
+
+        def cooldown(now):
+            result = real_cooldown(now)
+            if not wave["open"]:
+                entered.wait(timeout=5)
+                wave["open"] = True
+            return result
+
+        statuses = []
+        status_lock = threading.Lock()
+
+        def attempt():
+            handler, sent = self._handler({"secret": "wrong"})
+            handler._handle_login()
+            with status_lock:
+                statuses.append(sent["status"])
+
+        with (
+            mock.patch.object(
+                fofatoto, "_login_cooldown_remaining", side_effect=cooldown
+            ),
+            mock.patch.object(fofatoto.time, "sleep") as msleep,
+        ):
+            threads = [threading.Thread(target=attempt) for _ in range(n)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=5)
+            self.assertTrue(all(not thread.is_alive() for thread in threads))
+            self.assertEqual(msleep.call_count, fofatoto._WEB_AUTH_LOGIN_MAX_FAILS)
+            msleep.assert_called_with(1)
+
+        self.assertEqual(statuses.count(401), fofatoto._WEB_AUTH_LOGIN_MAX_FAILS)
+        self.assertEqual(statuses.count(429), extra)
+        self.assertEqual(
+            len(fofatoto._web_login_fails), fofatoto._WEB_AUTH_LOGIN_MAX_FAILS
+        )
+
 
 class WebAuthLoginTemplateTest(unittest.TestCase):
     """登录页与主页面的静态断言。"""

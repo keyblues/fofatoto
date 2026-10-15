@@ -2994,6 +2994,8 @@ def verify_web_auth_token(token: str, secret: str) -> bool:
 # ThreadingHTTPServer（每连接一线程）下不构成全局限流：并行连接各自休眠仍可
 # 全速爆破，还会占满线程。冷却期不再逐请求 sleep，线程立即释放，同时把并行
 # 爆破的有效速率压到窗口阈值。
+# 是否 sleep 必须与记账在同一把锁里决定。先放开锁再比对密钥、失败后再记账的话，
+# 并行请求会同时看到空窗口，全部 sleep(1)，阈值挡不住线程占用。
 _WEB_AUTH_LOGIN_WINDOW = 60.0  # 失败统计窗口（秒）
 _WEB_AUTH_LOGIN_MAX_FAILS = 5  # 窗口内允许的失败次数
 _WEB_AUTH_LOGIN_COOLDOWN = 60.0  # 达到阈值后的冷却时长（秒）
@@ -3002,22 +3004,32 @@ _web_login_fails: list[float] = []  # 窗口内的失败时间戳
 _web_login_lock = threading.Lock()
 
 
+def _prune_login_fails(now: float) -> float:
+    """清理过期失败并返回剩余冷却秒数。调用方须已持有 _web_login_lock。"""
+    while _web_login_fails and now - _web_login_fails[0] > _WEB_AUTH_LOGIN_WINDOW:
+        _web_login_fails.pop(0)
+    if len(_web_login_fails) >= _WEB_AUTH_LOGIN_MAX_FAILS:
+        return max(
+            0.0,
+            _WEB_AUTH_LOGIN_COOLDOWN - (now - _web_login_fails[-1]),
+        )
+    return 0.0
+
+
 def _login_cooldown_remaining(now: float) -> float:
     """返回登录冷却剩余秒数；0 表示当前不在冷却期。顺带清理过期记录。"""
     with _web_login_lock:
-        while _web_login_fails and now - _web_login_fails[0] > _WEB_AUTH_LOGIN_WINDOW:
-            _web_login_fails.pop(0)
-        if len(_web_login_fails) >= _WEB_AUTH_LOGIN_MAX_FAILS:
-            return max(
-                0.0,
-                _WEB_AUTH_LOGIN_COOLDOWN - (now - _web_login_fails[-1]),
-            )
-        return 0.0
+        return _prune_login_fails(now)
 
 
-def _register_login_fail(now: float) -> None:
+def _register_login_fail(now: float) -> bool:
+    """记一次登录失败。窗口已满时不追加并返回 False，调用方应快速 429 而不是 sleep。"""
     with _web_login_lock:
+        _prune_login_fails(now)
+        if len(_web_login_fails) >= _WEB_AUTH_LOGIN_MAX_FAILS:
+            return False
         _web_login_fails.append(now)
+        return True
 
 
 def _reset_login_fails() -> None:
@@ -3259,8 +3271,19 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         if not secrets.compare_digest(
             submitted.encode("utf-8"), cm.web_auth_secret.encode("utf-8")
         ):
-            _register_login_fail(now)
-            time.sleep(1)  # 每次失败固定 1 秒；窗口阈值限住了同时停在这里的线程数
+            # 上面的冷却检查已经放开锁。并行失败会同时看到空窗口，必须在记账的
+            # 同一临界区里再次裁决：超额的不 sleep，避免占满线程。
+            if not _register_login_fail(now):
+                remaining = _login_cooldown_remaining(now)
+                self._send_json(
+                    {
+                        "success": False,
+                        "error": f"登录尝试过于频繁，请约 {int(remaining) + 1} 秒后再试",
+                    },
+                    429,
+                )
+                return
+            time.sleep(1)  # 仅未超额的失败停 1 秒；并行超额请求已在锁内改为 429
             self._send_error("访问密钥错误", 401)
             return
         _reset_login_fails()  # 登录成功即清账，不把历史失败留给下一个合法用户
