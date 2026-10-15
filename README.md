@@ -13,6 +13,7 @@
 - **智能去重** — 单字段、多字段组合及 `url` 去重，去重字段自动追加到查询请求
 - **多格式导出** — CSV（UTF-8-BOM）/ JSON / TXT 三种格式
 - **配置热更新** — 修改 `config.json` 后下一个请求即生效，无需重启服务
+- **访问鉴权** — `config.json` 中 `web_auth` 一键开关：开启后 Web UI 需输入访问密钥登录（内嵌登录页，HMAC 签名 Cookie，30 天有效），改密钥即全员下线
 - **更新检查** — 启动时对照 GitHub Releases，有新版本时在命令行和 Web UI 顶栏提示；检查失败不影响使用
 - **中转站适配** — 自动识别第三方中转站（内置 `fafaapi.info`），账户信息统一展示
 - **跨平台** — 提供 Windows / Linux / macOS 编译二进制，开箱即用
@@ -46,7 +47,11 @@ chmod +x fofatoto
 ```json
 {
     "url": "https://fofa.info",
-    "key": "your-api-key"
+    "key": "your-api-key",
+    "web_auth": {
+        "enabled": false,
+        "secret": ""
+    }
 }
 ```
 
@@ -54,6 +59,7 @@ chmod +x fofatoto
 - 未配置有效 API Key 时，Web UI 仍会启动并显示配置引导；CLI 查询会打印配置模板后退出。
 - 修改配置后无需重启：Web UI 每次请求都会重新读取 `config.json`。
 - 使用第三方中转站时，把 `url` 改为中转站地址即可；内置了 `fafaapi.info` 的账户接口适配，其余地址按标准 FOFA 接口处理。
+- `web_auth` 控制 Web UI 访问鉴权（默认关闭）：`enabled` 置 `true` 并在 `secret` 填入访问密钥后生效，详见下方「访问鉴权」。
 
 ## 使用指南
 
@@ -75,7 +81,31 @@ chmod +x fofatoto
 
 Web UI 默认监听 `127.0.0.1`（仅本机可访问），启动后自动打开系统浏览器。无图形环境（SSH 会话、Linux 无 DISPLAY）会自动跳过打开并提示手动访问地址；WSL 环境会调起 Windows 默认浏览器；显式指定 `--host` 后也不自动打开浏览器，按启动时打印的地址访问即可。
 
-> 注意：Web UI 无访问鉴权。非回环监听时，局域网内任何人都能访问并使用你的 FOFA 配额，请谨慎使用。
+> 注意：Web UI 默认不开启访问鉴权。非回环监听时，局域网内任何人都能访问并使用你的 FOFA 配额，建议开启下方「访问鉴权」。
+
+### 访问鉴权
+
+`config.json` 中的 `web_auth` 字段可开启 Web UI 访问鉴权（默认关闭，CLI 不受影响）：
+
+```json
+{
+    "url": "https://fofa.info",
+    "key": "your-api-key",
+    "web_auth": {
+        "enabled": true,
+        "secret": "你的访问密钥"
+    }
+}
+```
+
+开启后的行为：
+
+- 浏览器打开 Web UI 先看到内嵌的中文登录页，输入 `secret` 中的访问密钥登录；登录成功签发 HMAC-SHA256 签名的 `HttpOnly` Cookie，有效期 30 天，无需服务端会话存储。
+- 所有页面与 API（含导出下载）在鉴权开启时均需有效 Cookie，未认证的 API 请求返回 401；浏览器内同源请求自动携带 Cookie，前端无需额外配置。
+- 登录失败有全局限流保护（防在线爆破）：60 秒窗口内累计 5 次失败后进入 60 秒冷却，冷却期间登录请求快速返回 429、不再逐请求延时——并行连接既无法绕过限流，也不会占住服务线程。登录成功后失败计数立即清零。访问日志会记录每次登录的成功与失败（含 429）。
+- Web UI 仅支持 HTTP（明文传输）：在不可信网络（公网映射、共享 Wi-Fi 等）下，鉴权 Cookie 存在被同网段嗅探后重放的可能。请仅在可信环境使用，并建议设置较长的随机访问密钥；若怀疑登录态泄露，修改 `web_auth.secret` 即可立即吊销全部已登录会话。
+- 配置热更新同样生效：修改 `web_auth.secret` 立即吊销所有已签发的登录态（全员需重新登录）；`enabled` 改为 `false` 后下一个请求即恢复无鉴权。
+- `enabled` 为 `true` 但 `secret` 为空时为失败封闭：任何密钥都无法登录，登录页会提示先补配置，启动横幅同步警告。
 
 Web UI 提供三种模式：
 
@@ -371,7 +401,7 @@ uv run --python 3.12 fofatoto.py "ip=1.1.1.1" -l 5
 +-----------------+
 ```
 
-Web UI 由 `http.server` 提供：仅监听本机（默认 `127.0.0.1`，可用 `--host` 变更），前端为内联 HTML/CSS/JS（无外部资源），通过 `/api/search`、`/api/icon`、`/api/export`、`/api/batch`、`/api/progress`、`/api/info` 等接口与后端交互，多线程处理请求。
+Web UI 由 `http.server` 提供：仅监听本机（默认 `127.0.0.1`，可用 `--host` 变更），前端为内联 HTML/CSS/JS（无外部资源），通过 `/api/search`、`/api/icon`、`/api/export`、`/api/batch`、`/api/progress`、`/api/info` 等接口与后端交互，多线程处理请求。`config.json` 开启 `web_auth` 后，页面与全部 API 经 HMAC 签名 Cookie（`/api/auth/login` 登录、`/api/auth/logout` 登出）做访问鉴权。
 
 ## 构建指南
 
