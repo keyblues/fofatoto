@@ -255,6 +255,20 @@ class PlaceholderTest(unittest.TestCase):
         out = fofatoto.expand_placeholder_query("host={}", ["a.com", "b.com"], "{}")
         self.assertEqual(out, ["host=a.com", "host=b.com"])
 
+    def test_normalize_batch_targets(self):
+        self.assertEqual(
+            fofatoto.normalize_batch_targets(
+                ["  a.com  ", "# comment", "", "   ", "b.com", 3, None]
+            ),
+            ["a.com", "b.com"],
+        )
+        self.assertEqual(
+            fofatoto.normalize_batch_targets("  a.com  \n# comment\n\nb.com\n"),
+            ["a.com", "b.com"],
+        )
+        self.assertEqual(fofatoto.normalize_batch_targets(None), [])
+        self.assertEqual(fofatoto.normalize_batch_targets({"a": 1}), [])
+
     def test_load_batch_targets(self):
         with tempfile.NamedTemporaryFile(
             "w", suffix=".txt", delete=False, encoding="utf-8"
@@ -488,6 +502,64 @@ class SearchAllEfficientCursorTest(unittest.TestCase):
         self.assertFalse(stats.partial)
 
 
+class SearchAllEfficientSmallTargetTest(unittest.TestCase):
+    """覆盖率取整不得把仍有匹配的深度导出收成目标 0。"""
+
+    @staticmethod
+    def _size(url: str) -> str:
+        from urllib.parse import parse_qs, urlparse
+
+        return parse_qs(urlparse(url).query)["size"][0]
+
+    def _run(self, total: int, rows: list, fill: float = 0.8, max_size: int = 0):
+        calls = []
+        events = []
+
+        def fake_urlopen(url, timeout=None):
+            calls.append(self._size(url))
+            page = rows if len(calls) > 1 else (rows[:1] if rows else [])
+            return FakeResponse({"error": False, "size": total, "results": page})
+
+        client = fofatoto.FofaClient("https://fofa.info", "k")
+        with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
+            stats = client.search_all_efficient(
+                'host="example.com"',
+                max_size=max_size,
+                fields="host",
+                fill_percent=fill,
+                api_rate_limit=0,
+                progress_callback=events.append,
+            )
+        return calls, events, stats
+
+    def test_one_hit_default_fill_fetches_the_row(self):
+        calls, events, stats = self._run(1, [["only.example"]])
+        self.assertEqual(calls, ["1", "1"])
+        self.assertEqual([r.host for r in stats.results], ["only.example"])
+        self.assertEqual(stats.total, 1)
+        names = [event["event"] for event in events]
+        self.assertNotIn("skip_zero_target", names)
+        init = next(event for event in events if event["event"] == "init")
+        self.assertEqual(init["target_count"], 1)
+        self.assertEqual(init["raw_target_count"], 0)
+
+    def test_fill_above_one_row_keeps_truncated_target(self):
+        rows = [[f"h{i}.example"] for i in range(8)]
+        calls, events, stats = self._run(10, rows)
+        self.assertEqual(calls, ["1", "8"])
+        self.assertEqual(len(stats.results), 8)
+        init = next(event for event in events if event["event"] == "init")
+        self.assertEqual(init["target_count"], 8)
+
+    def test_zero_total_still_skips_the_fetch(self):
+        calls, events, stats = self._run(0, [])
+        self.assertEqual(calls, ["1"])
+        self.assertEqual(stats.results, [])
+        self.assertEqual(stats.total, 0)
+        self.assertIn("no_match", [event["event"] for event in events])
+        self.assertNotIn("skip_zero_target", [event["event"] for event in events])
+
+
 class FillHelpTest(unittest.TestCase):
     def test_fill_help_uses_open_closed_range(self):
         action = next(
@@ -589,9 +661,10 @@ class BatchPerTargetLimitTest(unittest.TestCase):
                 task_id=task_id, kind="batch"
             )
         self.addCleanup(lambda: fofatoto._export_tasks.pop(task_id, None))
+        write_mock = mock.Mock(return_value={"csv": "x"})
         with (
             mock.patch.object(handler, "_current_client", return_value=client),
-            mock.patch.object(fofatoto, "_write_web_exports", return_value={"csv": "x"}),
+            mock.patch.object(fofatoto, "_write_web_exports", write_mock),
             mock.patch.object(fofatoto, "_sleep_interruptible"),
         ):
             handler._run_batch_task(
@@ -601,6 +674,7 @@ class BatchPerTargetLimitTest(unittest.TestCase):
                 0.8,
                 max_size,
             )
+        self.write_mock = write_mock
         return client
 
     def _stats(self, query):
@@ -634,6 +708,95 @@ class BatchPerTargetLimitTest(unittest.TestCase):
         client = self._run("batch-deep", 0, deep_side_effect=fake_deep)
         self.assertEqual(seen, [("host=a.com", 0), ("host=b.com", 0)])
         client.search.assert_not_called()
+
+    def test_all_api_errors_finish_error_without_files(self):
+        def fake_search(query, size=100, **kwargs):
+            raise fofatoto.FofaAPIError("API 错误")
+
+        self._run("batch-all-fail", 100, search_side_effect=fake_search)
+        task = fofatoto._export_tasks["batch-all-fail"]
+        self.assertEqual(task.status, "error")
+        self.assertEqual(task.error, "全部目标查询失败")
+        self.assertEqual(task.failed_count, 2)
+        self.assertEqual(task.fetched, 0)
+        self.assertFalse(task.partial)
+        self.assertEqual(task.output_files, {})
+        self.write_mock.assert_not_called()
+
+    def test_some_api_errors_mark_partial_and_keep_rows(self):
+        def fake_search(query, size=100, **kwargs):
+            if query == "host=a.com":
+                raise fofatoto.FofaAPIError("API 错误")
+            return self._stats(query)
+
+        self._run("batch-partial", 100, search_side_effect=fake_search)
+        task = fofatoto._export_tasks["batch-partial"]
+        self.assertEqual(task.status, "done")
+        self.assertTrue(task.partial)
+        self.assertEqual(task.failed_count, 1)
+        self.assertEqual(task.fetched, 1)
+        self.write_mock.assert_called_once()
+
+    def test_empty_success_still_finishes_done(self):
+        def fake_search(query, size=100, **kwargs):
+            return fofatoto.SearchStats(total=0, unique_ips=0, results=[])
+
+        self._run("batch-empty-ok", 100, search_side_effect=fake_search)
+        task = fofatoto._export_tasks["batch-empty-ok"]
+        self.assertEqual(task.status, "done")
+        self.assertFalse(task.partial)
+        self.assertEqual(task.failed_count, 0)
+        self.write_mock.assert_called_once()
+
+
+class BatchTargetNormalizeTest(unittest.TestCase):
+    def _handle(self, targets):
+        handler = fofatoto.FofaWebHandler.__new__(fofatoto.FofaWebHandler)
+        sent = {}
+        holder = {}
+        handler._require_client = mock.Mock(return_value=object())
+        handler._read_body = mock.Mock(
+            return_value={
+                "base_query": 'host="{}"',
+                "targets": targets,
+                "placeholder": "{}",
+            }
+        )
+        handler._send_json = mock.Mock(
+            side_effect=lambda data, status=200: sent.update(data)
+        )
+        handler._send_error = mock.Mock(
+            side_effect=lambda error, status=200, data=None: sent.update(
+                error=str(error)
+            )
+        )
+
+        def fake_start(task_id, target, args):
+            holder["task_id"] = task_id
+            holder["args"] = args
+
+        self.addCleanup(
+            lambda: fofatoto._export_tasks.pop(holder.get("task_id", ""), None)
+        )
+        with mock.patch.object(fofatoto, "_start_export_thread", fake_start):
+            handler._handle_batch()
+        return sent, holder
+
+    def test_handle_batch_trims_and_drops_comments_before_expand(self):
+        sent, holder = self._handle(
+            ["  a.com  ", "# comment", "", "   ", "b.com"]
+        )
+        self.assertTrue(sent.get("success"))
+        self.assertEqual(
+            holder["args"][1], ['host="a.com"', 'host="b.com"']
+        )
+        task = fofatoto._export_tasks[sent["task_id"]]
+        self.assertEqual(task.total_targets, 2)
+
+    def test_handle_batch_rejects_comment_only_targets(self):
+        sent, holder = self._handle(["# comment", "  ", ""])
+        self.assertEqual(sent.get("error"), "Base query and targets required")
+        self.assertNotIn("args", holder)
 
 
 class ExporterTest(unittest.TestCase):
@@ -723,6 +886,33 @@ class WebHtmlRenderTest(unittest.TestCase):
         )
         self.assertIn('id="batchMaxSize"', fofatoto.WEB_HTML_TEMPLATE)
         self.assertIn("max_size:maxSize", fofatoto.WEB_HTML_TEMPLATE)
+
+    def test_sort_and_exclude_keep_search_total(self):
+        src = fofatoto.WEB_HTML_TEMPLATE
+        self.assertIn(
+            "currentMode=\"instant\",currentResults=[],currentTotal=0,", src
+        )
+        self.assertIn("currentTotal=(data.data&&data.data.total)||0", src)
+        self.assertIn("total:currentTotal", src)
+        self.assertNotIn("total:currentResults.length", src)
+        clear_at = src.find("function clearResults()")
+        self.assertGreater(clear_at, 0)
+        self.assertIn("currentTotal=0", src[clear_at:clear_at + 700])
+
+    def test_batch_client_trims_and_skips_comments(self):
+        src = fofatoto.WEB_HTML_TEMPLATE
+        self.assertIn(
+            '.map(function(l){return l.trim()}).filter(function(l){return l&&l.charAt(0)!=="#"})',
+            src,
+        )
+        self.assertNotIn(
+            '.filter(function(l){return l.trim()})',
+            src,
+        )
+        self.assertIn(
+            'if(!targetLines.length){showMessage("error","请输入批量目标");return}',
+            src,
+        )
 
     def test_web_links_use_build_url_helper(self):
         """表格链接与即时预览 TXT 走同一个 buildUrl，规则与 Python build_url 对齐。"""

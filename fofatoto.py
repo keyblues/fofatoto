@@ -425,7 +425,7 @@ td{max-width:240px}
 <script>
 var fieldCategories=__FIELD_CATEGORIES_JSON__;
 var selectedFields=__DEFAULT_FIELDS_JSON__;
-var currentMode="instant",currentResults=[],currentColumns=[],currentView=[],rowHeight=0,OVERSCAN=10,previewRendered=false,exportTaskId=null,exportPollTimer=null,sortColumn=null,sortAsc=true,historyActiveIndex=-1,historyVisibleItems=[],vsLastWindow=null;
+var currentMode="instant",currentResults=[],currentTotal=0,currentColumns=[],currentView=[],rowHeight=0,OVERSCAN=10,previewRendered=false,exportTaskId=null,exportPollTimer=null,sortColumn=null,sortAsc=true,historyActiveIndex=-1,historyVisibleItems=[],vsLastWindow=null;
 var ACCOUNT_REFRESH_INTERVAL=180000,accountRefreshTimer=null,lastAccountRefresh=0;
 function initFieldSelector(){renderChips();renderFieldPanel();var ctrl=document.getElementById("fieldControl");var trig=document.createElement("div");trig.className="field-trigger";trig.id="fieldTrigger";trig.textContent="+";trig.addEventListener("click",function(e){e.stopPropagation();toggleFieldPanel()});ctrl.appendChild(trig);document.getElementById("fpSearch").addEventListener("input",filterFields);var fieldRowDown=false;document.addEventListener("mousedown",function(e){fieldRowDown=!!(e.target.closest&&e.target.closest(".field-row"))},true);document.addEventListener("click",function(){var p=document.getElementById("fieldPanel");if(p.classList.contains("open")&&!fieldRowDown)p.classList.remove("open")});document.addEventListener("keydown",function(e){if(e.key==="Escape")document.getElementById("fieldPanel").classList.remove("open")})}
 var dragField=null;
@@ -459,9 +459,9 @@ function openIconModal(){var ov=document.getElementById("iconOverlay"),inp=docum
 function closeIconModal(){document.getElementById("iconOverlay").classList.remove("show")}
 function iconModalError(msg){var el=document.getElementById("iconModalError");el.textContent=msg;el.style.display="block"}
 function submitIconExtract(){var inp=document.getElementById("iconTargetInput"),target=inp.value.trim();if(!target){iconModalError("请输入网站地址");return}var btn=document.getElementById("iconExtractBtn"),oldText=btn.textContent;btn.disabled=true;btn.textContent="提取中...";fetch("/api/icon",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target:target})}).then(function(r){return r.json()}).then(function(data){if(!data.success){iconModalError(formatApiError(data,"icon 提取失败"));return}var hash=(data.data||{}).icon_hash;if(!hash){iconModalError("服务器返回数据缺少 icon_hash，请重试");return}var q='icon_hash="'+hash+'"';var qin=document.getElementById("queryInput");qin.value=q;autoResizeQueryInput();closeIconModal();qin.focus()}).catch(function(e){iconModalError("网络错误: "+e.message)}).finally(function(){btn.disabled=false;btn.textContent=oldText})}
-function doInstantSearch(query){var size=parseInt(document.getElementById("instantSize").value)||100,fields=getSelectedFields(),full=document.getElementById("instantFull").checked;clearResults();showMessage("info","搜索中...");fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:query,size:size,fields:fields,full:full})}).then(function(r){return r.json()}).then(function(data){clearMessage();if(data.success){currentResults=data.data.results||[];currentColumns=data.data.columns||[];var _sb=getScrollBox();if(_sb)_sb.scrollTop=0;renderResults(data.data)}else showMessage("error",formatApiError(data,"搜索失败"))}).catch(function(e){showMessage("error","网络错误: "+e.message)})}
+function doInstantSearch(query){var size=parseInt(document.getElementById("instantSize").value)||100,fields=getSelectedFields(),full=document.getElementById("instantFull").checked;clearResults();showMessage("info","搜索中...");fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:query,size:size,fields:fields,full:full})}).then(function(r){return r.json()}).then(function(data){clearMessage();if(data.success){currentResults=data.data.results||[];currentColumns=data.data.columns||[];currentTotal=(data.data&&data.data.total)||0;var _sb=getScrollBox();if(_sb)_sb.scrollTop=0;renderResults(data.data)}else showMessage("error",formatApiError(data,"搜索失败"))}).catch(function(e){showMessage("error","网络错误: "+e.message)})}
 function doDeepExport(query){var fill=parseFloat(document.getElementById("exportFill").value),maxSize=parseInt(document.getElementById("exportMaxSize").value)||0,fields=getSelectedFields(),full=document.getElementById("exportFull").checked;if(isNaN(fill))fill=0.8;if(fill<=0||fill>1){showMessage("error","覆盖率必须在 0 到 1 之间");return}if(maxSize<0){showMessage("error","上限不能小于 0");return}if(exportPollTimer){showMessage("error","已有导出任务正在运行，请先取消或等待完成");return}exportTaskId=null;clearMessage();showExportPanelStart(query,fill,maxSize,full);setSearchBusy(true,"导出中...");fetch("/api/export",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:query,fill_percent:fill,max_size:maxSize,fields:fields,full:full})}).then(function(r){return r.json()}).then(function(data){if(data.success){exportTaskId=data.task_id;pollProgress()}else{setSearchBusy(false);showExportPanelError(formatApiError(data,"导出失败"))}}).catch(function(e){setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})}
-function doBatchSearch(baseQuery){var ph=document.getElementById("batchPlaceholder").value||"{}",targets=document.getElementById("batchTargets").value.trim(),fill=parseFloat(document.getElementById("batchFill").value)||0.8,maxSize=parseInt(document.getElementById("batchMaxSize").value)||0,fields=getSelectedFields();if(!targets){showMessage("error","请输入批量目标");return}if(baseQuery.indexOf(ph)===-1){showMessage("error","基础查询必须包含占位符: "+ph);return}if(maxSize<0){showMessage("error","每目标上限不能小于 0");return}if(exportPollTimer){showMessage("error","已有任务正在运行，请先取消或等待完成");return}var targetLines=targets.replace(/\r/g,"").split("\n").filter(function(l){return l.trim()});exportTaskId=null;clearMessage();showBatchPanelStart(baseQuery,targetLines.length,ph,fill,maxSize);setSearchBusy(true,"批量查询中...");fetch("/api/batch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({base_query:baseQuery,targets:targetLines,placeholder:ph,fill_percent:fill,max_size:maxSize,fields:fields})}).then(function(r){return r.json()}).then(function(data){if(data.success){exportTaskId=data.task_id;pollProgress()}else{setSearchBusy(false);showExportPanelError(formatApiError(data,"批量导出失败"))}}).catch(function(e){setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})}
+function doBatchSearch(baseQuery){var ph=document.getElementById("batchPlaceholder").value||"{}",targets=document.getElementById("batchTargets").value.trim(),fill=parseFloat(document.getElementById("batchFill").value)||0.8,maxSize=parseInt(document.getElementById("batchMaxSize").value)||0,fields=getSelectedFields();if(!targets){showMessage("error","请输入批量目标");return}if(baseQuery.indexOf(ph)===-1){showMessage("error","基础查询必须包含占位符: "+ph);return}if(maxSize<0){showMessage("error","每目标上限不能小于 0");return}if(exportPollTimer){showMessage("error","已有任务正在运行，请先取消或等待完成");return}var targetLines=targets.replace(/\r/g,"").split("\n").map(function(l){return l.trim()}).filter(function(l){return l&&l.charAt(0)!=="#"});if(!targetLines.length){showMessage("error","请输入批量目标");return}exportTaskId=null;clearMessage();showBatchPanelStart(baseQuery,targetLines.length,ph,fill,maxSize);setSearchBusy(true,"批量查询中...");fetch("/api/batch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({base_query:baseQuery,targets:targetLines,placeholder:ph,fill_percent:fill,max_size:maxSize,fields:fields})}).then(function(r){return r.json()}).then(function(data){if(data.success){exportTaskId=data.task_id;pollProgress()}else{setSearchBusy(false);showExportPanelError(formatApiError(data,"批量导出失败"))}}).catch(function(e){setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})}
 function exportMetaItem(label,value){return '<div class="export-meta-item"><span class="export-meta-label">'+escHtml(label)+'</span><span class="export-meta-value">'+escHtml(value)+'</span></div>'}
 function exportTarget(d){return d.target_count||d.total_estimated||0}
 function showExportPanelStart(query,fill,maxSize,full){document.getElementById("exportPanel").classList.add("show");document.getElementById("exportPanelTitle").textContent="深度导出";document.getElementById("exportPanelState").textContent="启动中";document.getElementById("exportPanelFill").style.width="0%";document.getElementById("exportPanelMessage").textContent="正在创建导出任务，完成后可下载 CSV / JSON / TXT。";document.getElementById("exportPanelMeta").innerHTML=exportMetaItem("查询",query)+exportMetaItem("覆盖率",Math.round(fill*100)+"%")+exportMetaItem("上限",maxSize>0?maxSize.toLocaleString():"不限制")+exportMetaItem("数据范围",full?"全部数据":"基础字段");document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-secondary" onclick="cancelExport()">取消</button>';updateLayout()}
@@ -503,11 +503,11 @@ function applyQueryPick(field,value){var safe=value.replace(/"/g,'\\"');var frag
 function addExclusion(field,value){for(var i=0;i<excludedFilters.length;i++){if(excludedFilters[i].field===field&&excludedFilters[i].value===value)return}excludedFilters.push({field:field,value:value});renderCurrentView()}
 function removeExclusion(index){if(index<0||index>=excludedFilters.length)return;excludedFilters.splice(index,1);renderCurrentView()}
 function renderExclusionChips(){var c=document.getElementById("exclusionChips");if(!c)return;var h="";excludedFilters.forEach(function(f,i){h+='<span class="exc-chip">不看 '+escHtml(f.field)+'="'+escHtml(f.value)+'"<span class="exc-x" onclick="removeExclusion('+i+')">&times;</span></span>'});c.innerHTML=h}
-function renderCurrentView(){var view=currentResults,ips={};if(excludedFilters.length){view=currentResults.filter(function(r){return !excludedFilters.some(function(f){return String(r[f.field]||"")===String(f.value)})})}view.forEach(function(r){if(r.ip)ips[r.ip]=1});renderResults({results:view,columns:currentColumns,total:currentResults.length,unique_ips:Object.keys(ips).length});renderExclusionChips();if(excludedFilters.length)showPreviewStatus("已排除 "+excludedFilters.length+" 项，显示 "+view.length+"/"+currentResults.length)}
+function renderCurrentView(){var view=currentResults,ips={};if(excludedFilters.length){view=currentResults.filter(function(r){return !excludedFilters.some(function(f){return String(r[f.field]||"")===String(f.value)})})}view.forEach(function(r){if(r.ip)ips[r.ip]=1});renderResults({results:view,columns:currentColumns,total:currentTotal,unique_ips:Object.keys(ips).length});renderExclusionChips();if(excludedFilters.length)showPreviewStatus("已排除 "+excludedFilters.length+" 项，显示 "+view.length+"/"+currentResults.length)}
 function toggleSettings(e){if(e)e.stopPropagation();var p=document.getElementById("settingsPopup");p.classList.toggle("show")}
 function toggleLogoutItem(show){var b=document.getElementById("logoutBtn");if(b)b.style.display=show?"block":"none"}
 function logoutWebAuth(){fetch("/api/auth/logout",{method:"POST"}).then(function(r){return r.json()}).then(function(){location.href="/"}).catch(function(){location.href="/"})}
-function clearResults(){exitPickMode();excludedFilters=[];currentView=[];rowHeight=0;vsLastWindow=null;renderExclusionChips();previewRendered=false;document.getElementById("resultsArea").style.display="none";document.getElementById("resultsTable").style.display="table";document.getElementById("emptyState").style.display="none";document.querySelector("#resultsTable thead").innerHTML="";document.querySelector("#resultsTable tbody").innerHTML="";currentResults=[];currentColumns=[];sortColumn=null;updateLayout()}
+function clearResults(){exitPickMode();excludedFilters=[];currentView=[];rowHeight=0;vsLastWindow=null;renderExclusionChips();previewRendered=false;document.getElementById("resultsArea").style.display="none";document.getElementById("resultsTable").style.display="table";document.getElementById("emptyState").style.display="none";document.querySelector("#resultsTable thead").innerHTML="";document.querySelector("#resultsTable tbody").innerHTML="";currentResults=[];currentColumns=[];currentTotal=0;sortColumn=null;updateLayout()}
 function updateShellHeight(){var header=document.querySelector(".header");if(header)document.documentElement.style.setProperty("--header-height",Math.ceil(header.getBoundingClientRect().height)+"px")}
 function updateLayout(){syncModeContent();updateShellHeight();fitHistoryDropdown();fitResultsHeight()}
 function shellBottom(){var shell=document.querySelector(".container");return shell?shell.getBoundingClientRect().bottom:window.innerHeight}
@@ -1751,6 +1751,10 @@ class FofaClient:
         target_count = raw_target_count
         if max_size > 0 and target_count > max_size:
             target_count = max_size
+        # 覆盖率取整会把小总量变成 0（1 * 0.8 → 0）。有匹配时至少抓 1 条，
+        # 否则深度导出直接返回空结果，Web 与 -l max 都会写出空文件。
+        if total_estimated > 0 and target_count < 1:
+            target_count = 1
         trigger_cb(
             "init",
             total_estimated=total_estimated,
@@ -3623,7 +3627,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                 return
             body = self._read_body()
             base_query = body.get("base_query", "")
-            targets = body.get("targets", [])
+            targets = normalize_batch_targets(body.get("targets", []))
             placeholder = body.get("placeholder", "{}")
             fields = body.get("fields") or DEFAULT_FIELDS
             try:
@@ -3742,12 +3746,25 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                     # 目标间隔同样可被取消中断，补齐批量模式的取消响应
                     _sleep_interruptible(2, cancel_check)
 
+            # 与单次导出一致：一个结果都没有且每个目标都是 API 错误时记失败，
+            # 不把空文件当成完成。部分目标失败但仍有结果则标 partial。
+            if failed_count and not all_results:
+                _finish_export_task(
+                    task_id,
+                    "error",
+                    fetched=0,
+                    failed_count=failed_count,
+                    error="全部目标查询失败",
+                )
+                return
+
             output_files = _write_web_exports("fofa_batch", all_results, fields)
 
             _finish_export_task(
                 task_id,
                 "done",
                 progress=1.0,
+                partial=failed_count > 0,
                 fetched=len(all_results),
                 output_files=output_files,
                 failed_count=failed_count,
@@ -4033,6 +4050,27 @@ def main():
         handle_single_mode(client, args)
 
 
+def normalize_batch_targets(lines) -> list[str]:
+    """与批量文件相同：去掉首尾空白，丢弃空行和 # 注释。
+
+    Web 提交的 targets 是字符串列表。整段文本按行拆开；非字符串条目忽略，
+    避免把错误类型按字符展开进查询。
+    """
+    if isinstance(lines, str):
+        lines = lines.splitlines()
+    elif not isinstance(lines, (list, tuple)):
+        return []
+    targets = []
+    for line in lines:
+        if not isinstance(line, str):
+            continue
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        targets.append(line)
+    return targets
+
+
 def expand_placeholder_query(
     base_query: str, targets: list[str], placeholder: str
 ) -> list[str]:
@@ -4043,13 +4081,9 @@ def load_batch_targets(file_path: Path) -> list[str]:
     if not file_path.exists():
         raise FileNotFoundError(f"批量目标文件不存在: {file_path}")
 
-    targets = []
-    for line in file_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        targets.append(line)
-
+    targets = normalize_batch_targets(
+        file_path.read_text(encoding="utf-8").splitlines()
+    )
     if not targets:
         raise ValueError("批量目标文件中没有有效的目标值")
 
