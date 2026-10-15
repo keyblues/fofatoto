@@ -748,6 +748,21 @@ class BatchPerTargetLimitTest(unittest.TestCase):
         self.assertEqual(task.failed_count, 0)
         self.write_mock.assert_called_once()
 
+    def test_api_error_mixed_with_empty_success_is_partial(self):
+        def fake_search(query, size=100, **kwargs):
+            if query == "host=a.com":
+                raise fofatoto.FofaAPIError("API 错误")
+            return fofatoto.SearchStats(total=0, unique_ips=0, results=[])
+
+        self._run("batch-mixed-empty", 100, search_side_effect=fake_search)
+        task = fofatoto._export_tasks["batch-mixed-empty"]
+        self.assertEqual(task.status, "done")
+        self.assertTrue(task.partial)
+        self.assertEqual(task.failed_count, 1)
+        self.assertEqual(task.fetched, 0)
+        self.assertEqual(task.error, "")
+        self.write_mock.assert_called_once()
+
 
 class BatchTargetNormalizeTest(unittest.TestCase):
     def _handle(self, targets):

@@ -3746,9 +3746,10 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                     # 目标间隔同样可被取消中断，补齐批量模式的取消响应
                     _sleep_interruptible(2, cancel_check)
 
-            # 与单次导出一致：一个结果都没有且每个目标都是 API 错误时记失败，
-            # 不把空文件当成完成。部分目标失败但仍有结果则标 partial。
-            if failed_count and not all_results:
+            # 一个结果都没有且每个目标都是 API 错误时记失败，不把空文件当成完成。
+            # 成功但 0 条不计入 failed_count：只要不是全部 API 错误，就写出导出，
+            # 有失败目标时标 partial。
+            if total_queries and failed_count == total_queries and not all_results:
                 _finish_export_task(
                     task_id,
                     "error",
