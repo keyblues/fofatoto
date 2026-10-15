@@ -1779,7 +1779,15 @@ class WebAccessLogTest(unittest.TestCase):
         line = self._logged(self._handler("GET", "/json/version"), 500)
         self.assertIn("/json/version", line)
         self.assertIn("127.0.0.1", line)
-        self.assertTrue(line.endswith("500  127.0.0.1\n"))
+        self.assertTrue(line.endswith("500      127.0.0.1\n"))
+
+    def test_status_column_padded_so_peer_lines_align(self):
+        ok = self._at("GET", "/api/search", 200, "127.0.0.1")
+        drop = self._at("GET", "/", "dropped", "127.0.0.1")
+        miss = self._at("GET", "/nope", 404, "192.168.1.5")
+        self.assertEqual(ok.index("127.0.0.1"), drop.index("127.0.0.1"))
+        self.assertEqual(ok.index("127.0.0.1"), miss.index("192.168.1.5"))
+        self.assertTrue(ok.startswith("[web] 14:48:02  GET   /api/search"))
 
     def test_repeated_homepage_loads_collapse(self):
         handler = self._handler("GET", "/")
@@ -1791,7 +1799,7 @@ class WebAccessLogTest(unittest.TestCase):
         self.assertEqual(first, self._at("GET", "/", 200, "127.0.0.1", clock=first[6:14]))
         self.assertEqual(second, "")
         self.assertIn("GET   /", third)
-        self.assertTrue(third.endswith("200  127.0.0.1\n"))
+        self.assertTrue(third.endswith("200      127.0.0.1\n"))
 
     def test_progress_error_still_logged(self):
         line = self._logged(
@@ -1830,14 +1838,14 @@ class WebAccessLogTest(unittest.TestCase):
     def test_ipv6_loopback_is_kept(self):
         line = self._logged(self._handler("POST", "/api/icon", peer="::1"), 200)
         self.assertEqual(line, self._at("POST", "/api/icon", 200, "::1", clock=line[6:14]))
-        self.assertTrue(line.endswith("  200  ::1\n"))
+        self.assertTrue(line.endswith("200      ::1\n"))
 
     def test_control_chars_do_not_break_the_line(self):
         line = self._logged(self._handler("GET", "/foo\nbar"), 404)
         self.assertEqual(line.count("\n"), 1)
         self.assertNotIn("\nbar", line)
         self.assertIn("GET   /foo", line)
-        self.assertTrue(line.endswith("404  127.0.0.1\n"))
+        self.assertTrue(line.endswith("404      127.0.0.1\n"))
 
     def test_send_error_boilerplate_is_not_duplicated(self):
         handler = self._handler("GET", "/nope")
@@ -1854,6 +1862,83 @@ class WebAccessLogTest(unittest.TestCase):
             error=("Request timed out: %r", TimeoutError("slow")),
         )
         self.assertIn("[web] 127.0.0.1 Request timed out:", line)
+
+
+class WebClientDisconnectTest(unittest.TestCase):
+    """客户端提前断开（BrokenPipeError 等）不再刷 traceback，只记一行 dropped。"""
+
+    def _handler(self, method="GET", path="/", peer="100.112.135.120"):
+        handler = fofatoto.FofaWebHandler.__new__(fofatoto.FofaWebHandler)
+        handler.command = method
+        handler.path = path
+        handler.client_address = (peer, 57082)
+        return handler
+
+    def _raise_in_base(self, exc):
+        return mock.patch.object(
+            fofatoto.http.server.BaseHTTPRequestHandler,
+            "handle_one_request",
+            side_effect=exc,
+        )
+
+    def _captured(self, fn, *args):
+        buf = io.StringIO()
+        with mock.patch.object(sys, "stderr", buf):
+            fn(*args)
+        return _plain_log(buf.getvalue())
+
+    def test_broken_pipe_is_swallowed_and_logged_once(self):
+        handler = self._handler("GET", "/")
+        with self._raise_in_base(BrokenPipeError(32, "Broken pipe")):
+            log = self._captured(handler.handle_one_request)
+        self.assertTrue(handler.close_connection)
+        self.assertEqual(log.count("\n"), 1)
+        self.assertIn("GET   /", log)
+        self.assertTrue(log.endswith("dropped  100.112.135.120\n"))
+
+    def test_connection_reset_is_swallowed_too(self):
+        handler = self._handler("POST", "/api/search")
+        with self._raise_in_base(ConnectionResetError(104, "Connection reset")):
+            log = self._captured(handler.handle_one_request)
+        self.assertTrue(handler.close_connection)
+        self.assertIn("POST  /api/search", log)
+        self.assertTrue(log.endswith("dropped  100.112.135.120\n"))
+
+    def test_drop_before_request_line_is_parsed(self):
+        # 读请求行阶段就断开：command/path 尚不存在，也不能抛 traceback。
+        handler = fofatoto.FofaWebHandler.__new__(fofatoto.FofaWebHandler)
+        with self._raise_in_base(ConnectionAbortedError(10053, "aborted")):
+            log = self._captured(handler.handle_one_request)
+        self.assertTrue(handler.close_connection)
+        self.assertIn("dropped", log)
+
+    def test_other_exceptions_still_propagate(self):
+        handler = self._handler()
+        with self._raise_in_base(ValueError("boom")):
+            with self.assertRaises(ValueError):
+                handler.handle_one_request()
+
+    def test_server_handle_error_ignores_connection_errors(self):
+        server = fofatoto._FofaHTTPServer.__new__(fofatoto._FofaHTTPServer)
+        try:
+            raise BrokenPipeError(32, "Broken pipe")
+        except BrokenPipeError:
+            log = self._captured(server.handle_error, object(), ("127.0.0.1", 1234))
+        self.assertEqual(log, "")
+
+    def test_server_handle_error_condenses_unexpected_exceptions(self):
+        server = fofatoto._FofaHTTPServer.__new__(fofatoto._FofaHTTPServer)
+        try:
+            raise RuntimeError("boom")
+        except RuntimeError:
+            log = self._captured(server.handle_error, object(), ("127.0.0.1", 1234))
+        self.assertEqual(log.count("\n"), 1)
+        self.assertIn("RuntimeError: boom", log)
+        self.assertNotIn("Traceback", log)
+
+    def test_server_keeps_threading_defaults(self):
+        self.assertTrue(fofatoto._FofaHTTPServer.daemon_threads)
+        self.assertTrue(fofatoto._FofaHTTPServer.allow_reuse_address)
 
 
 if __name__ == "__main__":

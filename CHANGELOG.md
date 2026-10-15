@@ -5,6 +5,8 @@
 ## Unreleased
 
 ### 修复
+- stdout 非 TTY 时（Docker 容器、重定向日志）Python 默认块缓冲，启动横幅和 Web 启动信息滞留在缓冲区，`docker logs` 只能看到 stderr 的访问日志、ASCII 横幅缺失。`main()` 入口把非 TTY 的 stdout 改为行缓冲，stdout 与 stderr 按时间顺序出现。
+- Web UI 客户端提前断开连接（刷新页面、探活探测、代理掐断）不再刷整段 `BrokenPipeError` traceback，安静关闭连接并只记一行 `dropped` 访问日志；服务器层其余意外异常也压缩为单行，不再输出 socketserver 的完整回溯。访问日志的状态列补齐到固定宽度（数字状态码 3 位、`dropped` 7 位），带来源地址的各行 IP 落在同一列。
 - `--dedup` 中不在 `-f` 里的字段按 `--dedup` 的顺序追加。这些字段会进入 FOFA 的 `fields` 参数和 CSV 表头；原先用集合收集，两个及以上缺失字段的顺序会随进程变化。例如 `-f ip,port --dedup ip,host,domain` 固定得到 `ip,port,host,domain`。
 - 深度导出遇到无法按 `%Y-%m-%d %H:%M:%S` 解析的 `lastupdatetime` 时停止翻页。原先解析失败会清空 `before` 游标并重试同一窗口：host 已经去重，满页又不会触发短页停止，循环不会结束。
 - Web 表格里的 host/url 链接，以及即时预览导出的 TXT，与命令行按同一套规则生成地址：协议取 `protocol`，端口 443、8443、4443 视为 https，默认的 `:80` 和 `:443` 不再写出，host 本身已带端口时不再重复追加。
@@ -20,7 +22,7 @@
 - AGENTS.md 组件表补一行 CLI 路径符号：`build_parser`、`handle_single_mode`、`handle_batch_mode`、`handle_icon_mode`、`load_batch_targets`、`run_batch_search`、`export_results`。
 - AGENTS.md：`FofaWebHandler` 及之后的组件行号按删掉终态 `message` 后的代码刷新。
 - README 本地 Nuitka 构建准备：Linux 依赖在已有的 `python3-dev`、`patchelf` 上补 `gcc`。受 PEP 668 约束的系统 Python 安装 nuitka 与 zstandard 时，使用虚拟环境或 `pip install --break-system-packages`。CI 容器里多出来的 `g++`、`make`、`wget`、`zstd` 不写入 README。
-- AGENTS.md 测试计数由 146 更正为 147，与当前 `test_fofatoto` 套件一致；构建依赖说明与 README 的本地编译准备对齐。
+- AGENTS.md 测试计数由 146 更正为 155，与当前 `test_fofatoto` 套件一致（含客户端断开 `dropped` 日志与状态列对齐用例）；构建依赖说明与 README 的本地编译准备对齐。
 
 ### 其他
 - 深度导出与批量任务结束时不再把终态文案写入 `message`。面板在 `done` / `error` 后自行生成文字（按 `partial`/`fetched`，或改用 `error`），进行中的 `task.message` 仍会显示。
