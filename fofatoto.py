@@ -1380,8 +1380,10 @@ def _looks_like_icon(data: bytes, ctype: str) -> bool:
     return _guess_content_type(data) == "image/svg+xml"
 
 
-# 调用方看到的抓取失败文案。超时、拒绝、HTTP 状态和被拦截的内网地址用同一句，
-# 避免拿错误差异做端口探测，也不回显跳转后的地址。
+# CLI --icon 与 POST /api/icon 只看到这一句。超时、拒绝、HTTP 状态、超限、
+# 空响应、HTML 解析失败、页面没有可用图标、初始地址不是 http/https，以及被拦截的
+# 内网地址，都用同一句，避免拿错误差异做探测，也不回显跳转后的地址。
+# 原因类别只写 stderr：协议、主机、端口。
 _ICON_FETCH_FAIL = "图标抓取失败"
 _ICON_MAX_REDIRECTS = 10
 _ICON_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
@@ -1721,7 +1723,8 @@ def _fetch_url(url: str, max_bytes: int, accept: str = "*/*") -> tuple[bytes, st
 def _resolve_icon_from_url(url: str) -> tuple[bytes, str]:
     """抓取网页解析 icon 标签；目标本身是图片时直接作为 icon。
 
-    返回 (icon_bytes, icon 来源 URL)。
+    返回 (icon_bytes, icon 来源 URL)。失败时调用方只看到「图标抓取失败」，
+    不带回地址，也不按超限、空响应、解析失败或没有图标拆开文案。
     """
     # 直接图片目标按图标上限（5MB）抓取；未识别为图片时再单独施加 HTML 上限（2MB）
     data, final_url, ctype = _fetch_url(
@@ -1730,18 +1733,16 @@ def _resolve_icon_from_url(url: str) -> tuple[bytes, str]:
     if _looks_like_icon(data, ctype):
         return data, final_url
     if len(data) > _MAX_HTML_BYTES:
-        raise IconExtractError(
-            f"HTML 响应超过大小上限 {_MAX_HTML_BYTES // (1024 * 1024)}MB: {url}"
-        )
+        raise _icon_fetch_error("html-size", final_url)
 
     parser = _IconLinkParser()
-    parse_error: Optional[Exception] = None
+    parse_failed = False
     try:
         parser.feed(data.decode("utf-8", errors="replace"))
         parser.close()
-    except Exception as e:
-        # 解析崩溃不静默吞掉：候选链全部失败时把真实原因并入最终错误，避免误归因
-        parse_error = e
+    except Exception:
+        # 异常文本可能含页面片段。候选全部失败时只在 stderr 记 html-parse。
+        parse_failed = True
 
     candidates = []
     if parser.icon_href:
@@ -1749,24 +1750,35 @@ def _resolve_icon_from_url(url: str) -> tuple[bytes, str]:
     candidates.append(urljoin(final_url, "/favicon.ico"))
 
     last_error: Optional[Exception] = None
+    empty_url = ""
     for href in candidates:
+        saw_empty = False
         try:
             if href.lower().startswith("data:"):
-                # 格式错误在此抛 IconExtractError 并由下方 except 记入 last_error
+                # 格式错误记入 last_error，不把 data URI 片段带回调用方
                 raw = _decode_data_uri(href)
                 return raw, "(data: URI)"
             icon_url = urljoin(final_url, href)
             raw, icon_final, _ = _fetch_url(icon_url, _MAX_ICON_BYTES, accept="image/*,*/*;q=0.8")
             if not raw:
-                raise IconExtractError(f"图标响应为空: {icon_url}")
+                saw_empty = True
+                empty_url = icon_url
+                raise IconExtractError(_ICON_FETCH_FAIL)
             return raw, icon_final
         except Exception as e:
             last_error = e
+            if not saw_empty:
+                empty_url = ""
             continue
-    note = f"HTML 解析失败（{parse_error}）；" if parse_error else ""
-    if last_error:
-        raise IconExtractError(f"页面未找到可用图标（{note}{last_error}）")
-    raise IconExtractError(f"{note}页面未找到可用图标: {url}")
+    if empty_url:
+        logged = _icon_fetch_error("empty", empty_url)
+        if not parse_failed:
+            raise logged
+    if parse_failed:
+        raise _icon_fetch_error("html-parse", final_url)
+    if isinstance(last_error, IconExtractError) and str(last_error) == _ICON_FETCH_FAIL:
+        raise IconExtractError(_ICON_FETCH_FAIL) from None
+    raise _icon_fetch_error("no-icon", final_url)
 
 
 def resolve_icon(target: str, allow_file: bool = True) -> dict:
@@ -1776,7 +1788,8 @@ def resolve_icon(target: str, allow_file: bool = True) -> dict:
     1. 原始 icon_hash 整数（-?\\d+）→ 直接返回，不产生网络请求
     2. 本地 icon 文件路径（仅 allow_file=True 的 CLI 场景）
     3. 网址（缺 scheme 时先补 https://，失败回退 http://；也可以直接
-       指向图片 URL，如 https://x.com/favicon.ico）
+       指向图片 URL，如 https://x.com/favicon.ico）。网址失败时调用方只得到
+       「图标抓取失败」，不含地址。
     """
     target = (target or "").strip()
     if not target:
@@ -1811,22 +1824,24 @@ def resolve_icon(target: str, allow_file: bool = True) -> dict:
                 raise IconExtractError(f"icon 文件超过大小上限 {_MAX_ICON_BYTES // (1024 * 1024)}MB")
             return _result(raw, str(path), "file")
 
-    if re.match(r"^https?://", target, re.I):
+    # 带 scheme 的地址只试一次（ftp/file 等在连接前按 bad-scheme 失败）。
+    # 无 scheme 时先 https 再 http，两条都失败仍只向调用方返回同一句。
+    if "://" in target:
         attempts = [target]
-    elif "://" in target:
-        raise IconExtractError(f"仅支持 http/https: {target}")
     else:
         attempts = [f"https://{target}", f"http://{target}"]
 
-    errors = []
+    errors: list[str] = []
     for url in attempts:
         try:
             raw, icon_url = _resolve_icon_from_url(url)
             return _result(raw, icon_url, "url")
         except IconExtractError as e:
             errors.append(str(e))
-        except Exception as e:
-            errors.append(f"{e}: {url}")
+        except Exception:
+            errors.append(str(_icon_fetch_error("error", url)))
+    if not errors or all(item == _ICON_FETCH_FAIL for item in errors):
+        raise IconExtractError(_ICON_FETCH_FAIL)
     raise IconExtractError("；".join(errors))
 
 
