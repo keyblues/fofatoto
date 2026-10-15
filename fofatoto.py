@@ -2797,6 +2797,7 @@ def _write_web_exports(prefix: str, results: list, fields: str) -> dict:
 _WEB_QUIET_PATHS = frozenset({"/api/progress"})
 _WEB_LOG_METHOD_WIDTH = 6
 _WEB_LOG_PATH_WIDTH = 24
+_WEB_LOG_STATUS_WIDTH = 7  # 容纳 “dropped” 这类非数字状态，来源 IP 列保持对齐
 _WEB_HOME_BURST_SEC = 30.0
 _web_log_lock = threading.Lock()
 _web_home_seen: dict[tuple[str, int], float] = {}
@@ -2906,11 +2907,14 @@ def _format_web_access(
     if not clock:
         clock = datetime.now().strftime("%H:%M:%S")
     path_col = target.ljust(_WEB_LOG_PATH_WIDTH) if len(target) < _WEB_LOG_PATH_WIDTH else target
+    # 数字状态码 3 位，dropped 7 位；带来源地址的行补齐状态列，IP 才在同一列。
+    # 没有 peer 的行不补，避免行尾留空格。
+    status_col = shown.ljust(_WEB_LOG_STATUS_WIDTH) if peer else shown
     suffix = f"  {GRAY}{peer}{RESET}" if peer else ""
     return (
         f"{GRAY}[web]{RESET} {GRAY}{clock}{RESET}  "
         f"{_method_color(method)}{method:<{_WEB_LOG_METHOD_WIDTH}}{RESET}"
-        f"{path_col}  {_status_color(status)}{shown}{RESET}{suffix}\n"
+        f"{path_col}  {_status_color(status)}{status_col}{RESET}{suffix}\n"
     )
 
 
@@ -2951,6 +2955,20 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         peer = _web_peer_label(getattr(self, "client_address", None))
         prefix = f"{peer} " if peer else ""
         _write_web_log(f"[web] {prefix}{message}\n")
+
+    def handle_one_request(self):
+        # 客户端在响应写回前断开（刷新页面、探活探测、代理/Tailscale 掐断
+        # 连接）是正常现象。socketserver 默认会为这类 BrokenPipeError /
+        # ConnectionResetError 打整段 traceback，这里改为安静关闭连接，
+        # 只补一行 dropped 日志。
+        try:
+            super().handle_one_request()
+        except ConnectionError:
+            self.close_connection = True
+            method = str(getattr(self, "command", None) or "-")
+            target = _web_log_target(getattr(self, "path", "") or "/")
+            peer = _web_peer_label(getattr(self, "client_address", None))
+            _write_web_log(_format_web_access(method, target, "dropped", peer))
 
     def _send_json(self, data: dict, status: int = 200):
         self.send_response(status)
@@ -3539,6 +3557,25 @@ def _lan_ips() -> list[str]:
         return []
 
 
+class _FofaHTTPServer(http.server.ThreadingHTTPServer):
+    """ThreadingHTTPServer + 安静的连接断开处理。
+
+    socketserver 默认对每个请求异常打整段 traceback（"Exception occurred
+    during processing of request"）。客户端断开类异常已在 handler 层记为
+    dropped，这里直接吞掉；其余意外异常压缩成单行日志，不再刷屏。
+    """
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, ConnectionError):
+            return
+        peer = _web_peer_label(client_address)
+        message = f"{type(exc).__name__}: {exc}".translate(_control_char_table())
+        _write_web_log(
+            f"{GRAY}[web]{RESET} {peer} 请求处理异常 {YELLOW}{message}{RESET}\n"
+        )
+
+
 class FofaWebServer:
     """FOFA Web UI 服务器"""
 
@@ -3567,11 +3604,9 @@ class FofaWebServer:
     def start(self):
         FofaWebHandler.config_manager = self.config_manager
 
-        # ThreadingHTTPServer 默认已启用 daemon_threads 与
-        # allow_reuse_address（HTTPServer 类属性），无需重复设置
-        self.httpd = http.server.ThreadingHTTPServer(
-            (self.host, self.port), FofaWebHandler
-        )
+        # _FofaHTTPServer 继承 ThreadingHTTPServer，默认已启用 daemon_threads
+        # 与 allow_reuse_address（HTTPServer 类属性），无需重复设置
+        self.httpd = _FofaHTTPServer((self.host, self.port), FofaWebHandler)
         start_export_cleanup_timer()
 
         is_wildcard = self.host == "0.0.0.0"
@@ -3607,6 +3642,14 @@ class FofaWebServer:
 
 
 def main():
+    # stdout 非 TTY 时 Python 默认块缓冲：docker logs / 重定向下，横幅和
+    # Web 启动信息滞留在缓冲区，只能看到 stderr 的访问日志（stdout 缓冲
+    # 在进程退出前都不落盘）。改为行缓冲，stdout 与 stderr 按时间顺序出现。
+    if not INTERACTIVE_OUTPUT:
+        try:
+            sys.stdout.reconfigure(line_buffering=True)
+        except Exception:
+            pass
     parser = build_parser()
     args = parser.parse_args()
     if args.no_update_check:
