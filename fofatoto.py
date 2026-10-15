@@ -1694,9 +1694,7 @@ def _fetch_url(url: str, max_bytes: int, accept: str = "*/*") -> tuple[bytes, st
                     raise _icon_fetch_error("http-status", current)
                 data = resp.read(max_bytes + 1)
                 if len(data) > max_bytes:
-                    raise IconExtractError(
-                        f"响应超过大小上限 {max_bytes // (1024 * 1024)}MB: {current}"
-                    )
+                    raise _icon_fetch_error("size", current)
                 headers = getattr(resp, "headers", None) or {}
                 raw_type = headers.get("Content-Type") or headers.get("content-type") or ""
                 ctype = str(raw_type).split(";")[0].strip().lower()

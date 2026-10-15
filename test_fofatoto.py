@@ -1389,7 +1389,10 @@ class ResolveIconTest(unittest.TestCase):
         with mock.patch.object(fofatoto, "_MAX_ICON_BYTES", 100):
             with self.assertRaises(fofatoto.IconExtractError) as cm:
                 self._run("https://example.com/logo.ico", routes)
-            self.assertIn("超过大小上限", str(cm.exception))
+            msg = str(cm.exception)
+            self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+            self.assertNotIn("example.com", msg)
+            self.assertNotIn("logo.ico", msg)
 
     def test_dead_link_falls_back_to_favicon_ico(self):
         calls = []
@@ -1638,6 +1641,35 @@ class IconFetchGuardTest(unittest.TestCase):
         self.assertEqual(str(cm.exception), fofatoto._ICON_FETCH_FAIL)
         self.assertNotIn("10.2.3.4", str(cm.exception))
         self.assertNotIn("hidden", str(cm.exception))
+
+    def test_oversized_body_after_redirect_hides_final_url(self):
+        # 2xx 超过大小上限时也走统一失败文案，不回显跳转后的路径和用户信息
+        secret = "https://user:s3cret@cdn.example/private/icon.bin?token=abc"
+        routes = {
+            "http://public.example/start": FakeHTTPResponse(
+                b"",
+                "http://public.example/start",
+                status=302,
+                headers={"Location": secret},
+            ),
+            secret: FakeHTTPResponse(b"x" * 200, secret, "application/octet-stream"),
+        }
+        with mock.patch.object(fofatoto, "_MAX_ICON_BYTES", 100):
+            with self.assertRaises(fofatoto.IconExtractError) as cm:
+                ResolveIconTest._run(
+                    "http://public.example/start",
+                    routes,
+                    allow_file=False,
+                    dns={"public.example": "93.184.216.34", "cdn.example": "93.184.216.34"},
+                )
+        msg = str(cm.exception)
+        self.assertEqual(msg, fofatoto._ICON_FETCH_FAIL)
+        self.assertNotIn("cdn.example", msg)
+        self.assertNotIn("private", msg)
+        self.assertNotIn("s3cret", msg)
+        self.assertNotIn("token", msg)
+        self.assertNotIn("user:", msg)
+        self.assertNotIn("超过大小上限", msg)
 
     def test_public_redirect_still_followed(self):
         calls = []
