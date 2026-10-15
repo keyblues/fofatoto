@@ -1904,6 +1904,43 @@ class WebClientDisconnectTest(unittest.TestCase):
         self.assertIn("POST  /api/search", log)
         self.assertTrue(log.endswith("dropped  100.112.135.120\n"))
 
+    def test_no_dropped_when_status_was_already_recorded(self):
+        # Bugbot：send_response 在头部阶段已调 log_request；正文/flush 阶段
+        # 才断开的请求只留状态码那一行，不再重复补 dropped。
+        handler = self._handler("POST", "/api/search")
+
+        def served_then_broke():
+            handler.log_request(200)
+            raise BrokenPipeError(32, "Broken pipe")
+
+        with mock.patch.object(
+            fofatoto.http.server.BaseHTTPRequestHandler,
+            "handle_one_request",
+            side_effect=served_then_broke,
+        ):
+            log = self._captured(handler.handle_one_request)
+        self.assertTrue(handler.close_connection)
+        self.assertEqual(log.count("\n"), 1)
+        self.assertIn("POST  /api/search", log)
+        self.assertNotIn("dropped", log)
+
+    def test_no_dropped_after_quiet_suppressed_status(self):
+        # 被静默的轮询也已记账：断开不产生孤立的 dropped 噪音行。
+        handler = self._handler("GET", "/api/progress?task_id=abc")
+
+        def served_then_broke():
+            handler.log_request(200)
+            raise ConnectionResetError(104, "Connection reset")
+
+        with mock.patch.object(
+            fofatoto.http.server.BaseHTTPRequestHandler,
+            "handle_one_request",
+            side_effect=served_then_broke,
+        ):
+            log = self._captured(handler.handle_one_request)
+        self.assertTrue(handler.close_connection)
+        self.assertEqual(log, "")
+
     def test_drop_before_request_line_is_parsed(self):
         # 读请求行阶段就断开：command/path 尚不存在，也不能抛 traceback。
         handler = fofatoto.FofaWebHandler.__new__(fofatoto.FofaWebHandler)
