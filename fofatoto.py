@@ -2930,6 +2930,9 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
     config_manager: ConfigManager
 
     def log_request(self, code="-", size="-"):
+        # 本请求周期已有状态码落账（含被静默的轮询/探测）：即使响应写回
+        # 阶段客户端断开，也不再补 dropped，避免同一请求出现 200 + dropped 两行。
+        self._web_status_logged = True
         target = _web_log_target(getattr(self, "path", "") or "/")
         status = _http_status_code(code)
         if _web_access_quiet(target.split("?", 1)[0], status):
@@ -2960,11 +2963,15 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         # 客户端在响应写回前断开（刷新页面、探活探测、代理/Tailscale 掐断
         # 连接）是正常现象。socketserver 默认会为这类 BrokenPipeError /
         # ConnectionResetError 打整段 traceback，这里改为安静关闭连接，
-        # 只补一行 dropped 日志。
+        # 只补一行 dropped 日志。send_response 在头部阶段已调 log_request：
+        # 已记录过状态码的请求（断开发生在正文/flush 阶段）不重复记账。
+        self._web_status_logged = False
         try:
             super().handle_one_request()
         except ConnectionError:
             self.close_connection = True
+            if getattr(self, "_web_status_logged", False):
+                return
             method = str(getattr(self, "command", None) or "-")
             target = _web_log_target(getattr(self, "path", "") or "/")
             peer = _web_peer_label(getattr(self, "client_address", None))
