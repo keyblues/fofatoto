@@ -2,7 +2,7 @@
 
 本文件使用发布记录（Releases）风格维护版本变更。
 
-## Unreleased
+## v1.9.0 - 2026-10-16
 
 ### 新增
 - **Web UI 访问鉴权**：`config.json` 新增 `web_auth`（`enabled` 开关 + `secret` 访问密钥，默认关闭，不影响 CLI）。开启后浏览器先进入内嵌中文登录页，登录成功签发 HMAC-SHA256 签名的 `HttpOnly` / `SameSite=Strict` Cookie（30 天有效，无服务端会话存储），所有页面与 API（含导出下载）均需有效 Cookie。密钥比较恒时；登录失败有全局滑动窗口限流（60 秒内 5 次失败后 60 秒冷却期，冷却中快速返回 429，防并行爆破且不占服务线程，登录成功即清零计数）；修改 `secret` 下一个请求即吊销全部已签发 Cookie，`enabled` 改 `false` 即恢复无鉴权（随配置热更新）。`enabled=true` 但 `secret` 为空时失败封闭：任何密钥都无法登录，登录页与启动横幅提示补配置。已登录时设置弹窗底部出现「退出登录」；非回环监听的启动警告改为提示开启本功能；新增 `POST /api/auth/login`、`POST /api/auth/logout` 端点（含登录限流 429 审计）；README 补充明文 HTTP 场景的嗅探风险与吊销指引；`config.example.json` 与自动生成的配置模板同步加入 `web_auth` 示例。
