@@ -139,6 +139,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Micr
 .update-badge:hover{color:#fff;border-color:#fbd38d}
 .header .account{display:flex;gap:12px;align-items:center;justify-content:flex-end;flex-wrap:wrap;font-size:12px;color:#a0aec0;min-width:0;text-align:right}
 .header .account strong{color:#e2e8f0}
+.account-user{display:inline-flex;align-items:center;gap:7px;min-width:0}
+.account-avatar{display:inline-flex;align-items:center;justify-content:center;position:relative;overflow:hidden;width:28px;height:28px;border-radius:50%;background:rgba(148,163,184,.2);color:#cbd5e1;flex-shrink:0}
+.account-avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.account-name{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600;color:#e2e8f0}
 .vip-badge{padding:2px 8px;border-radius:2px;font-size:11px;font-weight:600}
 .vip-badge.active{background:var(--success);color:#fff}
 .vip-badge.inactive{background:var(--danger);color:#fff}
@@ -428,7 +432,7 @@ td{max-width:240px}
 var fieldCategories=__FIELD_CATEGORIES_JSON__;
 var selectedFields=__DEFAULT_FIELDS_JSON__;
 var currentMode="instant",currentResults=[],currentTotal=0,currentColumns=[],currentView=[],rowHeight=0,OVERSCAN=10,previewRendered=false,exportTaskId=null,exportPollTimer=null,sortColumn=null,sortAsc=true,historyActiveIndex=-1,historyVisibleItems=[],vsLastWindow=null;
-var ACCOUNT_REFRESH_INTERVAL=180000,accountRefreshTimer=null,lastAccountRefresh=0;
+var ACCOUNT_REFRESH_INTERVAL=180000,accountRefreshTimer=null,lastAccountRefresh=0,accountInfoRepoll=null;
 function initFieldSelector(){renderChips();renderFieldPanel();var ctrl=document.getElementById("fieldControl");var trig=document.createElement("div");trig.className="field-trigger";trig.id="fieldTrigger";trig.textContent="+";trig.addEventListener("click",function(e){e.stopPropagation();toggleFieldPanel()});ctrl.appendChild(trig);document.getElementById("fpSearch").addEventListener("input",filterFields);var fieldRowDown=false;document.addEventListener("mousedown",function(e){fieldRowDown=!!(e.target.closest&&e.target.closest(".field-row"))},true);document.addEventListener("click",function(){var p=document.getElementById("fieldPanel");if(p.classList.contains("open")&&!fieldRowDown)p.classList.remove("open")});document.addEventListener("keydown",function(e){if(e.key==="Escape")document.getElementById("fieldPanel").classList.remove("open")})}
 var dragField=null;
 function clearChipDropClasses(){document.querySelectorAll("#fieldControl .chip").forEach(function(el){el.classList.remove("drop-before","drop-after")})}
@@ -452,7 +456,10 @@ function setupQueryDropTarget(){var input=document.getElementById("queryInput");
 function showConfigNotice(d){var box=document.getElementById("configAlert");document.getElementById("configAlertTitle").textContent="未配置有效的 FOFA API Key";document.getElementById("configAlertText").textContent="请编辑下方配置文件，保存后刷新本页面。";document.getElementById("configPath").textContent=d.config_path||"";document.getElementById("configTemplate").textContent=d.config_template||"";box.classList.add("show")}
 function hideConfigNotice(){document.getElementById("configAlert").classList.remove("show")}
 function formatApiError(data,fallback){var msg=(data&&data.error)||fallback||"请求失败";if(data&&data.data&&data.data.configured===false&&data.data.config_path){msg+="。配置文件: "+data.data.config_path}return msg}
-function loadAccountInfo(silent){return fetch("/api/info").then(function(r){return r.json()}).then(function(data){var d=data.data||{};toggleLogoutItem(!!d.web_auth_enabled);if(d.configured===false){showConfigNotice(d);document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">未配置</span> 等待 API Key';return}hideConfigNotice();if(data.success){if(d.relay){var vClass=d.isvip?"active":"inactive",vText=d.isvip?"有效":"无效";var h='<span class="vip-badge inactive">中转站</span> <span class="vip-badge '+vClass+'">'+vText+'</span> '+"剩余查询: <strong>"+escHtml(d.remain_api_query||"N/A")+"</strong>";if(d.today_remaining!==null&&d.today_remaining!==undefined)h+=" | 今日剩余: <strong>"+escHtml(d.today_remaining)+"</strong>";h+=" | 过期: "+escHtml(d.expiration||"N/A");document.getElementById("accountInfo").innerHTML=h}else{var vipClass=d.isvip?"active":"inactive",vipText=d.isvip?"VIP "+(d.vip_level||""):"未激活",serverText=d.server_ok?"正常":"异常",serverClass=d.server_ok?"ok":"fail";document.getElementById("accountInfo").innerHTML='<span class="vip-badge '+vipClass+'">'+escHtml(vipText)+'</span> 服务器: <span class="server-status '+serverClass+'">'+serverText+'</span> | 剩余查询: <strong>'+escHtml(d.remain_api_query||"N/A")+'</strong> | 过期: '+escHtml(d.expiration||"N/A");if(d.server_ok===false&&d.error&&!silent)showMessage("error",d.error)}}else{if(!silent){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 账户信息不可用';showMessage("error",formatApiError(data,"账户信息不可用"))}}}).catch(function(e){if(!silent){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 本地服务不可用';showMessage("error","网络错误: "+e.message)}}).finally(function(){updateLayout()})}
+function accountValueText(value){var text=value==null?"":String(value).trim();return text===""||text==="-1"?"—":text}
+function accountIdentityHtml(d){if(!d.official)return "";var name=String(d.username||"").trim()||String(d.nickname||"").trim()||"未命名用户",avatar=String(d.avatar||"").trim();return '<span class="account-user"><span class="account-avatar" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="7" r="4"/><path d="M4 22v-2a8 8 0 0 1 16 0v2z"/></svg>'+(avatar?'<img src="'+escAttr(avatar)+'" alt="" referrerpolicy="no-referrer" onerror="this.remove()">':"")+'</span><span class="account-name" title="'+escAttr(name)+'">'+escHtml(name)+'</span></span>'}
+function accountQuotaHtml(d){return [["remain_api_query","剩余查询次数"],["remain_api_data","剩余查询数量"]].map(function(item){return item[1]+": <strong>"+escHtml(accountValueText(d[item[0]]))+"</strong>"}).join(" | ")}
+function loadAccountInfo(silent){return fetch("/api/info").then(function(r){return r.json()}).then(function(data){var d=data.data||{};if(!d.pending_refresh){clearTimeout(accountInfoRepoll);accountInfoRepoll=null}else if(accountInfoRepoll===null){accountInfoRepoll=setTimeout(function(){accountInfoRepoll=null;loadAccountInfo(true)},2000)}toggleLogoutItem(!!d.web_auth_enabled);if(d.configured===false){showConfigNotice(d);document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">未配置</span> 等待 API Key';return}hideConfigNotice();if(data.success){if(d.relay){var vClass=d.isvip?"active":"inactive",vText=d.isvip?"有效":"无效";var h=accountIdentityHtml(d)+'<span class="vip-badge inactive">中转站</span> <span class="vip-badge '+vClass+'">'+vText+'</span> '+"剩余查询: <strong>"+escHtml(accountValueText(d.remain_api_query))+"</strong>";if(d.today_remaining!==null&&d.today_remaining!==undefined)h+=" | 今日剩余: <strong>"+escHtml(accountValueText(d.today_remaining))+"</strong>";h+=" | 过期: "+escHtml(accountValueText(d.expiration));document.getElementById("accountInfo").innerHTML=h}else{var vipClass=d.isvip?"active":"inactive",vipText=d.isvip==null||d.isvip===""?"":(d.isvip?"VIP "+(d.vip_level||""):"未激活"),serverText=d.server_ok?"正常":"异常",serverClass=d.server_ok?"ok":"fail";document.getElementById("accountInfo").innerHTML=accountIdentityHtml(d)+(vipText?'<span class="vip-badge '+vipClass+'">'+escHtml(vipText)+'</span> ':"")+'服务器: <span class="server-status '+serverClass+'">'+serverText+'</span> | '+accountQuotaHtml(d)+' | 过期: '+escHtml(accountValueText(d.expiration));if(d.server_ok===false&&d.error&&!silent)showMessage("error",d.error)}}else{if(!silent){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 账户信息不可用';showMessage("error",formatApiError(data,"账户信息不可用"))}}}).catch(function(e){if(!silent){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 本地服务不可用';showMessage("error","网络错误: "+e.message)}}).finally(function(){updateLayout()})}
 function startAccountRefresh(){if(accountRefreshTimer)return;accountRefreshTimer=setInterval(function(){loadAccountInfo(true);lastAccountRefresh=Date.now()},ACCOUNT_REFRESH_INTERVAL)}
 function stopAccountRefresh(){if(accountRefreshTimer){clearInterval(accountRefreshTimer);accountRefreshTimer=null}}
 function onVisibilityChange(){if(document.hidden){stopAccountRefresh()}else{var elapsed=Date.now()-lastAccountRefresh;if(elapsed>=ACCOUNT_REFRESH_INTERVAL){loadAccountInfo(true);lastAccountRefresh=Date.now()}startAccountRefresh()}}
@@ -558,33 +565,48 @@ def render_web_html() -> str:
 # ============ 配置相关 ============
 
 
+def _app_config_dir() -> Path:
+    """获取默认配置目录（config.json 与更新缓存所在）。
+
+    Nuitka onefile 模式下，bootstrap 在子进程环境注入 `NUITKA_ONEFILE_DIRECTORY`，
+    指向用户运行的原始可执行文件所在目录（解压出的临时目录不可用作配置目录，
+    进程退出即清理）。优先使用它；普通 Python 脚本模式回退到 sys.argv[0]/__file__。
+
+    注意：`NUITKA_ONEFILE_PARENT` 是 Nuitka 内部的进程 PID 标识
+    （`GetCurrentProcessId()`/`getpid()`），不是路径，不可用作配置目录——
+    v1.2.1 曾误用导致 config 被写入 `CWD\\<PID>\\config.json` 后丢失。
+    """
+    onefile_directory = os.environ.get("NUITKA_ONEFILE_DIRECTORY")
+    if onefile_directory:
+        return Path(onefile_directory).resolve()
+
+    entry = Path(sys.argv[0] if sys.argv and sys.argv[0] else __file__).resolve()
+    return entry.parent
+
+
+def _is_official_fofa_url(url: str) -> bool:
+    try:
+        return urlparse(url).hostname in {"fofa.info", "en.fofa.info"}
+    except ValueError:
+        return False
+
+
 class ConfigManager:
 
-    def __init__(self):
-        self.config_dir = self._get_config_dir()
-        self.config_file = self.config_dir / "config.json"
+    def __init__(self, config_file: Optional[Path] = None):
+        self.config_file = (
+            Path(config_file).expanduser().resolve()
+            if config_file is not None
+            else _app_config_dir() / "config.json"
+        )
+        self.config_dir = self.config_file.parent
         self.url = ""
         self.key = ""
         self.web_auth_enabled = False
         self.web_auth_secret = ""
-
-    def _get_config_dir(self) -> Path:
-        """获取配置目录。
-
-        Nuitka onefile 模式下，bootstrap 在子进程环境注入 `NUITKA_ONEFILE_DIRECTORY`，
-        指向用户运行的原始可执行文件所在目录（解压出的临时目录不可用作配置目录，
-        进程退出即清理）。优先使用它；普通 Python 脚本模式回退到 sys.argv[0]/__file__。
-
-        注意：`NUITKA_ONEFILE_PARENT` 是 Nuitka 内部的进程 PID 标识
-        （`GetCurrentProcessId()`/`getpid()`），不是路径，不可用作配置目录——
-        v1.2.1 曾误用导致 config 被写入 `CWD\\<PID>\\config.json` 后丢失。
-        """
-        onefile_directory = os.environ.get("NUITKA_ONEFILE_DIRECTORY")
-        if onefile_directory:
-            return Path(onefile_directory).resolve()
-
-        entry = Path(sys.argv[0] if sys.argv and sys.argv[0] else __file__).resolve()
-        return entry.parent
+        # 成功读取后记录 (路径, mtime_ns, size)；None 表示尚未读过
+        self._cache_key: Optional[tuple] = None
+        self._load_lock = threading.Lock()
 
     def ensure_exists(self) -> bool:
         if self.config_file.exists():
@@ -603,14 +625,33 @@ class ConfigManager:
             return False
 
     def load(self):
-        if self.config_file.exists():
+        """读取配置文件；文件未变化时沿用上次结果（mtime+size 缓存）。
+
+        Web 每个请求都会经过 load()（鉴权门卫、get_client、public_status），
+        长导出期间 /api/progress 每秒轮询一次，逐次读盘+解析是纯冗余。
+        stat 出的 (mtime_ns, size) 与缓存键一致即直接返回。
+        缓存读取前的文件状态，读取期间保存的配置留到下次调用重新读取。
+        解析失败不落缓存键，下次调用照旧重试，与旧行为一致。
+        """
+        with self._load_lock:
             try:
-                data = json.loads(self.config_file.read_text(encoding="utf-8"))
-                self.url = data.get("url", "")
-                self.key = data.get("key", "")
-                self._load_web_auth(data)
-            except Exception as e:
-                print(f"[警告] 读取 config.json 失败: {e}", file=sys.stderr)
+                st = self.config_file.stat()
+            except OSError:
+                st = None
+            if st is not None:
+                key = (str(self.config_file), st.st_mtime_ns, st.st_size)
+                if key == self._cache_key:
+                    return self
+            if self.config_file.exists():
+                try:
+                    data = json.loads(self.config_file.read_text(encoding="utf-8"))
+                    self.url = data.get("url", "")
+                    self.key = data.get("key", "")
+                    self._load_web_auth(data)
+                except Exception as e:
+                    print(f"[警告] 读取配置文件 {self.config_file} 失败: {e}", file=sys.stderr)
+                    return self
+                self._cache_key = key if st is not None else None
         return self
 
     def _load_web_auth(self, data: dict):
@@ -641,6 +682,7 @@ class ConfigManager:
         self.load()
         return {
             "configured": self.is_valid(),
+            "official": _is_official_fofa_url(self.url),
             "config_path": str(self.config_file),
             "config_template": json.dumps(
                 DEFAULT_CONFIG, ensure_ascii=False, indent=4
@@ -843,7 +885,7 @@ def fetch_latest_release(timeout: float = UPDATE_CHECK_TIMEOUT) -> Optional[tupl
 
 
 def _update_cache_file() -> Path:
-    return ConfigManager()._get_config_dir() / _UPDATE_CACHE_NAME
+    return _app_config_dir() / _UPDATE_CACHE_NAME
 
 
 def _cache_ttl(ok: bool) -> float:
@@ -1105,6 +1147,20 @@ def _validate_web_field_categories() -> None:
 
 
 _validate_web_field_categories()
+
+
+# 进度事件协议：search_all_efficient 经 progress_callback 发出的 dict 的 event 名。
+# 生产端（FofaClient）与消费端（CLI 控制台回调、Web 任务回调）共用同一份
+# 协议，收敛为常量防止两端字符串拼写漂移。
+EVENT_NO_MATCH = "no_match"
+EVENT_INIT = "init"
+EVENT_SKIP_ZERO_TARGET = "skip_zero_target"
+EVENT_PROGRESS = "progress"
+EVENT_TARGET_REACHED = "target_reached"
+EVENT_RETRY = "retry"
+EVENT_ERROR_PARTIAL = "error_partial"
+EVENT_INTERRUPTED = "interrupted"
+EVENT_DONE = "done"
 
 
 @dataclass
@@ -1984,6 +2040,8 @@ class FofaClient:
             if result.ip:
                 unique_ips.add(result.ip)
 
+        # 按返回条数本地计次，供 /api/info 估算中转站的剩余额度
+        _note_quota_used(len(results), self)
         total = data.get("size", 0)
         return SearchStats(total=total, unique_ips=len(unique_ips), results=results)
 
@@ -2031,7 +2089,7 @@ class FofaClient:
                         max(current_rate_limit * 1.5, current_rate_limit + 2),
                     )
                 trigger_cb(
-                    "retry",
+                    EVENT_RETRY,
                     stage=stage,
                     batch_num=batch_no,
                     attempt=attempt,
@@ -2057,7 +2115,7 @@ class FofaClient:
         _sleep_interruptible(current_rate_limit, cancel_check)
 
         if total_estimated == 0:
-            trigger_cb("no_match")
+            trigger_cb(EVENT_NO_MATCH)
             return SearchStats(
                 total=0,
                 unique_ips=0,
@@ -2074,7 +2132,7 @@ class FofaClient:
         if total_estimated > 0 and target_count < 1:
             target_count = 1
         trigger_cb(
-            "init",
+            EVENT_INIT,
             total_estimated=total_estimated,
             target_count=target_count,
             raw_target_count=raw_target_count,
@@ -2083,7 +2141,7 @@ class FofaClient:
         )
 
         if target_count <= 0:
-            trigger_cb("skip_zero_target")
+            trigger_cb(EVENT_SKIP_ZERO_TARGET)
             return SearchStats(
                 total=total_estimated,
                 unique_ips=0,
@@ -2124,7 +2182,7 @@ class FofaClient:
                     if all_results:
                         interrupted = True
                         trigger_cb(
-                            "error_partial",
+                            EVENT_ERROR_PARTIAL,
                             error=str(e),
                             fetched=len(all_results),
                             target_count=target_count,
@@ -2162,7 +2220,7 @@ class FofaClient:
                 )
 
                 trigger_cb(
-                    "progress",
+                    EVENT_PROGRESS,
                     batch_num=batch_num,
                     new_count=new_count,
                     dup_rate=dup_rate,
@@ -2175,7 +2233,7 @@ class FofaClient:
 
                 if len(all_results) >= target_count:
                     trigger_cb(
-                        "target_reached",
+                        EVENT_TARGET_REACHED,
                         fetched=len(all_results),
                         total_estimated=total_estimated,
                         target_count=target_count,
@@ -2199,14 +2257,14 @@ class FofaClient:
                 _sleep_interruptible(current_rate_limit, cancel_check)
         except KeyboardInterrupt:
             interrupted = True
-            trigger_cb("interrupted")
+            trigger_cb(EVENT_INTERRUPTED)
 
         if max_size > 0 and len(all_results) > max_size:
             all_results = all_results[:max_size]
             unique_ips = set(r.ip for r in all_results if r.ip)
 
         trigger_cb(
-            "done",
+            EVENT_DONE,
             interrupted=interrupted,
             fetched=len(all_results),
             total_estimated=total_estimated,
@@ -2331,15 +2389,16 @@ class Exporter:
 
         self.requested_has_url = "url" in self.requested_fields
 
-    def _prepare_dict_data(self):
-        """准备转换为字典的数据，包含动态 url 拼接"""
-        data = []
+    def _iter_dict_data(self):
+        """逐行产出 dict（含动态 url 拼接），供 CSV/JSON 流式写出。
+
+        生成器而非列表：大批量导出时不再把整表复制成第二份 dict 列表。
+        """
         for r in self.results:
             d = r.to_dict()
             if self.requested_has_url and not d.get("url"):
                 d["url"] = build_url(r)
-            data.append(d)
-        return data
+            yield d
 
     def export_csv(self, output_path: Path) -> int:
         if self.requested_fields:
@@ -2347,25 +2406,23 @@ class Exporter:
         else:
             fieldnames = ALL_FIELD_NAMES.copy()
 
-        all_keys = set()
-        data = self._prepare_dict_data()
-        for d in data:
-            all_keys.update(d.keys())
-
-        dynamic_extra = [
-            f
-            for f in all_keys
-            if f not in ALL_FIELD_NAMES
-            and not f.startswith("_")
-            and f not in fieldnames
-        ]
+        # 动态额外列 = 各行 _extra 里的自定义字段（to_dict 原样带出），
+        # 按首次出现顺序排列，无需先物化整表扫描键集合
+        seen = set(fieldnames)
+        dynamic_extra = []
+        for r in self.results:
+            for name in r._extra:
+                if name in KNOWN_FIELDS or name.startswith("_") or name in seen:
+                    continue
+                seen.add(name)
+                dynamic_extra.append(name)
 
         with output_path.open("w", encoding="utf-8-sig", newline="") as f:
             writer = csv.DictWriter(
                 f, fieldnames=fieldnames + dynamic_extra, extrasaction="ignore"
             )
             writer.writeheader()
-            for row in data:
+            for row in self._iter_dict_data():
                 writer.writerow(row)
 
         return len(self.results)
@@ -2375,19 +2432,21 @@ class Exporter:
             output_path.write_text("[]\n", encoding="utf-8")
             return 0
 
-        data = self._prepare_dict_data()
-        processed_data = []
+        # 逐行流式写出，输出与 json.dumps(list, indent=2) 逐字节一致，
+        # 避免为整表再建一份 dict 列表加一个巨型 JSON 字符串
+        with output_path.open("w", encoding="utf-8") as f:
+            f.write("[")
+            first = True
+            for d in self._iter_dict_data():
+                if self.requested_fields:
+                    d = {k: d.get(k, "") for k in self.requested_fields}
+                else:
+                    d = {k: v for k, v in d.items() if v != "" and v is not None}
+                item = json.dumps(d, ensure_ascii=False, indent=2)
+                f.write(("\n  " if first else ",\n  ") + item.replace("\n", "\n  "))
+                first = False
+            f.write("]" if first else "\n]")
 
-        for d in data:
-            if self.requested_fields:
-                d = {k: d.get(k, "") for k in self.requested_fields}
-            else:
-                d = {k: v for k, v in d.items() if v != "" and v is not None}
-            processed_data.append(d)
-
-        output_path.write_text(
-            json.dumps(processed_data, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
         return len(self.results)
 
     def export_txt(self, output_path: Path) -> int:
@@ -2465,11 +2524,11 @@ def create_console_progress_callback(bar_width=25):
         nonlocal progress_active
         event = state.get("event")
 
-        if event == "no_match":
+        if event == EVENT_NO_MATCH:
             finish_progress_line()
             print("  [*] 无匹配数据")
 
-        elif event == "init":
+        elif event == EVENT_INIT:
             finish_progress_line()
             total_estimated = state.get("total_estimated", 0)
             target_count = state.get("target_count", 0)
@@ -2486,11 +2545,11 @@ def create_console_progress_callback(bar_width=25):
             )
             print()
 
-        elif event == "skip_zero_target":
+        elif event == EVENT_SKIP_ZERO_TARGET:
             finish_progress_line()
             print("[*] 目标为 0，跳过批量抓取")
 
-        elif event == "progress":
+        elif event == EVENT_PROGRESS:
             fetched = state.get("fetched", 0)
             total_estimated = state.get("total_estimated", 1)
             target_count = state.get("target_count", total_estimated) or total_estimated
@@ -2519,7 +2578,7 @@ def create_console_progress_callback(bar_width=25):
             elif batch_num % 10 == 0 or fetched >= target_count:
                 print(line)
 
-        elif event == "target_reached":
+        elif event == EVENT_TARGET_REACHED:
             finish_progress_line()
             fetched = state.get("fetched", 0)
             total_estimated = state.get("total_estimated", 0)
@@ -2531,7 +2590,7 @@ def create_console_progress_callback(bar_width=25):
                 f"[*] {GREEN}已达目标{RESET} ({display_fetched:,}/{target_count:,}{extra_note}，总匹配 {total_estimated:,})"
             )
 
-        elif event == "retry":
+        elif event == EVENT_RETRY:
             finish_progress_line()
             stage = state.get("stage", "request")
             batch_num = state.get("batch_num", 0)
@@ -2543,7 +2602,7 @@ def create_console_progress_callback(bar_width=25):
                 f"[!] {label} 请求超时/失败，重试 {attempt}/{max_attempts - 1}，后续间隔调整为 {rate_limit:.1f}s..."
             )
 
-        elif event == "error_partial":
+        elif event == EVENT_ERROR_PARTIAL:
             finish_progress_line()
             error = state.get("error", "未知错误")
             fetched = state.get("fetched", 0)
@@ -2551,11 +2610,11 @@ def create_console_progress_callback(bar_width=25):
                 f"[!] 请求重试后仍失败，保留已获取 {fetched:,} 条结果继续导出: {error}"
             )
 
-        elif event == "interrupted":
+        elif event == EVENT_INTERRUPTED:
             finish_progress_line()
             print("[*] 已中断，保存已获取的数据...")
 
-        elif event == "done":
+        elif event == EVENT_DONE:
             finish_progress_line()
             interrupted = state.get("interrupted", False)
             fetched = state.get("fetched", 0)
@@ -2599,9 +2658,16 @@ def build_parser():
   %(prog)s --icon https://example.com "port=443"   # Icon 同款 + 附加过滤条件
   %(prog)s --icon ./favicon.ico -l max -csv        # 本地 icon 文件直接导出
   %(prog)s -c                                      # 快速检测账户状态
+  %(prog)s -w --config official.json              # 指定配置文件启动 Web UI
         """,
     )
     parser.add_argument("query", nargs="?", help="FOFA 查询语句，如: domain=baidu.com（--icon 模式下作为附加过滤条件）")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        metavar="FILE",
+        help="指定配置文件路径（默认读取脚本或可执行文件旁的 config.json）",
+    )
     parser.add_argument("-o", "--output", help="输出文件名（含后缀），如 results.csv")
     parser.add_argument(
         "-l",
@@ -2706,7 +2772,13 @@ def print_account_status(client: FofaClient):
                 )
                 print(highlight("[*] 服务器", server_status))
                 print(highlight("[*] Key状态", vip_status))
-                print(highlight("[*] 剩余查询", user_info.get("remain_api_query", "N/A")))
+                for name, label in (
+                    ("remain_api_query", "剩余查询次数"),
+                    ("remain_api_data", "剩余查询数量"),
+                ):
+                    value = user_info.get(name)
+                    text = "" if value is None else str(value).strip()
+                    print(highlight(f"[*] {label}", "—" if text in ("", "-1") else text))
                 print(highlight("[*] 过期时间", user_info.get("expiration", "N/A")))
                 print(highlight("[*] VIP等级", user_info.get("vip_level", "N/A")))
             print()
@@ -3001,14 +3073,14 @@ def _create_web_progress_callback(task_id: str):
             cancelled = task.cancelled
             discard = task.discard
             event = state.get("event")
-            if event == "no_match":
+            if event == EVENT_NO_MATCH:
                 task.message = "未找到匹配数据"
                 task.progress = 0.99
-            elif event == "init":
+            elif event == EVENT_INIT:
                 task.total_estimated = state.get("total_estimated", 0)
                 task.target_count = state.get("target_count", 0)
                 task.message = "正在按时间游标分批拉取数据"
-            elif event == "progress":
+            elif event == EVENT_PROGRESS:
                 task.fetched = state.get("fetched", 0)
                 task.total_estimated = state.get("total_estimated", 1)
                 task.target_count = state.get("target_count", task.target_count)
@@ -3016,7 +3088,7 @@ def _create_web_progress_callback(task_id: str):
                 if not cancelled:
                     target_count = task.target_count or task.total_estimated
                     task.progress = min(task.fetched / max(target_count, 1), 0.99)
-            elif event == "retry":
+            elif event == EVENT_RETRY:
                 stage = state.get("stage", "request")
                 batch_num = state.get("batch_num", 0)
                 attempt = state.get("attempt", 0)
@@ -3027,11 +3099,11 @@ def _create_web_progress_callback(task_id: str):
                     f"{label} 请求失败，正在重试 {attempt}/{max_attempts - 1}；"
                     f"后续间隔 {rate_limit:.1f}s"
                 )
-            elif event == "target_reached":
+            elif event == EVENT_TARGET_REACHED:
                 task.progress = 0.99
                 task.fetched = state.get("fetched", 0)
                 task.message = "已达到目标数量，正在整理文件"
-            elif event == "done":
+            elif event == EVENT_DONE:
                 task.progress = 0.99
                 if state.get("interrupted"):
                     task.partial = True
@@ -3041,7 +3113,7 @@ def _create_web_progress_callback(task_id: str):
                 task.fetched = state.get("fetched", 0)
                 task.unique_ips = state.get("unique_ips", 0)
                 task.total_quota_used = state.get("total_quota_used", 0)
-        if cancelled and (discard or event not in ("interrupted", "done")):
+        if cancelled and (discard or event not in (EVENT_INTERRUPTED, EVENT_DONE)):
             raise KeyboardInterrupt()
 
     return progress_callback
@@ -3056,22 +3128,22 @@ def _create_web_batch_progress_callback(
             if not task:
                 return
             event = state.get("event")
-            if task.cancelled and (task.discard or event not in ("interrupted", "done")):
+            if task.cancelled and (task.discard or event not in (EVENT_INTERRUPTED, EVENT_DONE)):
                 raise KeyboardInterrupt()
 
             task.current_target = batch_idx + 1
             task.total_targets = total_queries
-            if event == "init":
+            if event == EVENT_INIT:
                 task.current_total_estimated = state.get("total_estimated", 0)
                 task.current_target_count = state.get("target_count", 0)
-            elif event == "progress":
+            elif event == EVENT_PROGRESS:
                 task.current_fetched = state.get("fetched", 0)
                 task.current_total_estimated = state.get("total_estimated", 0)
                 task.current_target_count = state.get(
                     "target_count", task.current_target_count
                 )
                 task.total_quota_used = state.get("total_quota_used", 0)
-            elif event == "retry":
+            elif event == EVENT_RETRY:
                 attempt = state.get("attempt", 0)
                 max_attempts = state.get("max_attempts", 0)
                 rate_limit = state.get("rate_limit", 0)
@@ -3079,14 +3151,14 @@ def _create_web_batch_progress_callback(
                     f"目标 {batch_idx + 1}/{total_queries} 请求失败，正在重试 "
                     f"{attempt}/{max_attempts - 1}；后续间隔 {rate_limit:.1f}s"
                 )
-            elif event == "done":
+            elif event == EVENT_DONE:
                 task.current_fetched = state.get("fetched", task.current_fetched)
 
             current_target = task.current_target_count or task.current_total_estimated
             current_ratio = min(task.current_fetched / max(current_target, 1), 1)
             task.progress = min((batch_idx + current_ratio) / max(total_queries, 1), 0.99)
             task.fetched = base_count + task.current_fetched
-            if event != "retry":
+            if event != EVENT_RETRY:
                 task.message = f"正在查询目标 {batch_idx + 1}/{total_queries}"
 
     return progress_callback
@@ -3270,6 +3342,151 @@ def _write_web_log(line: str) -> None:
         sys.stderr.flush()
 
 
+# ============ 账户信息缓存与本地计次（/api/info） ============
+# FOFA 的账户信息接口与搜索共用频率限制：搜索高峰期 /api/info 频繁失败，
+# 右上角账户状态跟着显示异常。策略：
+# - 进程内缓存最近一次成功的账户信息，接口一律先回缓存；
+# - 每次 search 按返回条数本地累计（_note_quota_used），回缓存时从中转站
+#   「剩余查询」里扣掉；官方的月配额和 F 点保留账户接口的值；
+# - 缓存过期（成功 10 分钟 / 失败退避 1 分钟）且闲时（无导出/批量任务）
+#   才在后台刷新真实值，响应带 pending_refresh，前端每 2 秒补取，刷新完成后停止。
+_ACCOUNT_INFO_TTL = 600.0
+_ACCOUNT_INFO_FAIL_TTL = 60.0
+_account_info_lock = threading.Lock()
+_account_info_state: dict = {
+    "data": None,       # 最近一次成功的 get_usage 载荷（含 server_ok=True）
+    "fetched_at": 0.0,  # 最近一次尝试（无论成败）的时间；0 表示从未尝试
+    "ok": False,
+    "error": "",
+    "quota_mark": 0,    # 拉取该缓存时 _local_quota_used 的值
+    "client": None,     # 拉取时的 (base_url, key)，换账号即失效
+    "request_id": 0,    # 只允许最后启动的拉取写入缓存
+    "request_client": None,
+}
+_account_info_inflight = False
+_local_quota_used = 0  # 进程内计数；缓存存在时只累计该账号的返回条数
+
+
+def _note_quota_used(rows: int, client: FofaClient) -> None:
+    global _local_quota_used
+    with _account_info_lock:
+        # 热切换后旧任务仍可能返回，不计入新账号的余额估算。
+        cached_client = _account_info_state["client"]
+        if cached_client is not None and cached_client != _account_client_signature(client):
+            return
+        _local_quota_used += max(int(rows), 0)
+
+
+def _reset_account_info_state() -> None:
+    """清空账户信息缓存与本地计次。测试隔离用。"""
+    global _account_info_inflight, _local_quota_used
+    with _account_info_lock:
+        _account_info_state.update(
+            data=None, fetched_at=0.0, ok=False, error="", quota_mark=0, client=None,
+            request_id=_account_info_state["request_id"] + 1, request_client=None,
+        )
+        _local_quota_used = 0
+        _account_info_inflight = False
+
+
+def _account_client_signature(client: FofaClient) -> tuple:
+    return (getattr(client, "base_url", ""), getattr(client, "key", ""))
+
+
+def _web_idle_for_account_refresh() -> bool:
+    """闲时 = 没有导出/批量任务在跑，账户信息刷新不与搜索抢频率限制。"""
+    with _export_lock:
+        return not _has_running_export_task()
+
+
+def _fetch_account_info(client: FofaClient, request_id: Optional[int] = None) -> dict:
+    """真实调用一次账户接口并写入缓存，返回可直接下发的载荷。"""
+    now = time.time()
+    signature = _account_client_signature(client)
+    if request_id is None:
+        with _account_info_lock:
+            _account_info_state["request_id"] += 1
+            request_id = _account_info_state["request_id"]
+            _account_info_state["request_client"] = signature
+    try:
+        info = client.get_usage()
+    except FofaAPIError as e:
+        with _account_info_lock:
+            if _account_info_state["request_id"] == request_id:
+                if _account_info_state["client"] != signature:
+                    _account_info_state["data"] = None
+                _account_info_state.update(
+                    fetched_at=now, ok=False, error=str(e), client=signature
+                )
+        return {"server_ok": False, "error": str(e)}
+    payload = dict(info)
+    payload["server_ok"] = True
+    with _account_info_lock:
+        if _account_info_state["request_id"] == request_id:
+            _account_info_state.update(
+                data=payload,
+                fetched_at=now,
+                ok=True,
+                error="",
+                quota_mark=_local_quota_used,
+                client=signature,
+            )
+    return payload
+
+
+def _start_account_info_refresh(client: FofaClient) -> bool:
+    """后台刷新账户信息；已有刷新在跑时返回 False。"""
+    global _account_info_inflight
+    with _account_info_lock:
+        if (
+            _account_info_inflight
+            or _account_info_state["request_client"] != _account_client_signature(client)
+        ):
+            return False
+        _account_info_inflight = True
+        # 在线程启动前占用编号，避免旧账号的线程晚启动后变成最新请求。
+        _account_info_state["request_id"] += 1
+        request_id = _account_info_state["request_id"]
+
+    def worker():
+        global _account_info_inflight
+        try:
+            _fetch_account_info(client, request_id)
+        finally:
+            with _account_info_lock:
+                _account_info_inflight = False
+
+    threading.Thread(
+        target=worker, daemon=True, name="account-info-refresh"
+    ).start()
+    return True
+
+
+def _account_cached_payload(now: float, st: Optional[dict] = None) -> Optional[dict]:
+    """缓存载荷；中转站余额按本地返回条数扣减，官方配额沿用接口值。
+
+    传入 st 快照时按快照计算：调用方先定好本次要回什么，再启动后台
+    刷新，避免刷新线程抢先写回新值、漏进当次响应。
+    """
+    with _account_info_lock:
+        state = dict(st) if st is not None else dict(_account_info_state)
+        used_total = _local_quota_used
+    if state["data"] is None:
+        return None
+    info = dict(state["data"])
+    used = max(used_total - state["quota_mark"], 0)
+    try:
+        remain_value = int(str(info.get("remain_api_query")))
+    except (TypeError, ValueError):
+        remain_value = None  # "N/A" 等非数值不动，只报 local_used
+    if info.get("relay") and remain_value is not None and used > 0:
+        info["remain_api_query"] = max(remain_value - used, 0)
+    if used > 0:
+        info["local_used"] = used
+    info["info_age_seconds"] = max(int(now - state["fetched_at"]), 0)
+    return info
+
+
 # ============ Web 访问鉴权 ============
 
 # 由 config.json 的 web_auth（enabled/secret）控制。令牌为
@@ -3404,6 +3621,26 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
 
     config_manager: ConfigManager
 
+    # 路由表按方法名派发（getattr 到实例），实例级替换/mock 可直接生效；
+    # 鉴权豁免的 POST 集中在一处：登录/登出本身是鉴权流程的一部分。
+    _GET_ROUTES = {
+        "/": "_handle_index",
+        "/api/info": "_handle_info",
+        "/api/update": "_handle_update",
+        "/api/progress": "_handle_progress",
+        "/api/export/download": "_handle_export_download",
+    }
+    _POST_ROUTES = {
+        "/api/auth/login": "_handle_login",
+        "/api/auth/logout": "_handle_logout",
+        "/api/search": "_handle_search",
+        "/api/icon": "_handle_icon",
+        "/api/export": "_handle_export",
+        "/api/batch": "_handle_batch",
+        "/api/progress/cancel": "_handle_cancel",
+    }
+    _AUTH_EXEMPT_POST = frozenset({"/api/auth/login", "/api/auth/logout"})
+
     def log_request(self, code="-", size="-"):
         # 本请求周期已有状态码落账（含被静默的轮询/探测）：即使响应写回
         # 阶段客户端断开，也不再补 dropped，避免同一请求出现 200 + dropped 两行。
@@ -3499,12 +3736,23 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         if not path.exists():
             self._send_json({"success": False, "error": "File not found"}, 404)
             return
+        try:
+            size = path.stat().st_size
+        except OSError:
+            self._send_json({"success": False, "error": "File not found"}, 404)
+            return
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-        self.send_header("Content-Length", str(path.stat().st_size))
+        self.send_header("Content-Length", str(size))
         self.end_headers()
-        self.wfile.write(path.read_bytes())
+        # 分块流式写回：大导出文件下载不再整读进内存
+        with path.open("rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
 
     def _read_body(self) -> dict:
         length = _request_body_length(self.headers.get("Content-Length"))
@@ -3556,7 +3804,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             )
         return True
 
-    def _handle_login(self):
+    def _handle_login(self, parsed=None):
         """POST /api/auth/login：验证访问密钥并签发鉴权 Cookie。"""
         cm = self.config_manager
         cm.load()
@@ -3620,7 +3868,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             ],
         )
 
-    def _handle_logout(self):
+    def _handle_logout(self, parsed=None):
         """POST /api/auth/logout：清除鉴权 Cookie（幂等，未认证也可调用）。"""
         self._send_json(
             {"success": True},
@@ -3632,6 +3880,9 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             ],
         )
 
+    def _handle_index(self, parsed=None):
+        self._send_html(render_web_html())
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
@@ -3639,48 +3890,29 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         if self._web_auth_check(path):
             return
 
-        if path == "/":
-            self._send_html(render_web_html())
-        elif path == "/api/info":
-            self._handle_info()
-        elif path == "/api/update":
-            self._handle_update()
-        elif path == "/api/progress":
-            self._handle_progress(parsed)
-        elif path == "/api/export/download":
-            self._handle_export_download(parsed)
-        else:
+        name = self._GET_ROUTES.get(path)
+        if name is None:
             self._send_json({"success": False, "error": "Not found"}, 404)
+            return
+        getattr(self, name)(parsed)
 
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
 
-        if path not in ("/api/auth/login", "/api/auth/logout"):
-            if self._web_auth_check(path):
-                return
+        if path not in self._AUTH_EXEMPT_POST and self._web_auth_check(path):
+            return
 
-        if path == "/api/auth/login":
-            self._handle_login()
-        elif path == "/api/auth/logout":
-            self._handle_logout()
-        elif path == "/api/search":
-            self._handle_search()
-        elif path == "/api/icon":
-            self._handle_icon()
-        elif path == "/api/export":
-            self._handle_export()
-        elif path == "/api/batch":
-            self._handle_batch()
-        elif path == "/api/progress/cancel":
-            self._handle_cancel()
-        else:
+        name = self._POST_ROUTES.get(path)
+        if name is None:
             self._send_json({"success": False, "error": "Not found"}, 404)
+            return
+        getattr(self, name)(parsed)
 
-    def _handle_update(self):
+    def _handle_update(self, parsed=None):
         self._send_json({"success": True, "data": snapshot_update()})
 
-    def _handle_info(self):
+    def _handle_info(self, parsed=None):
         client = self._current_client()
         if not client:
             data = self._config_status()
@@ -3688,18 +3920,46 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             self._send_json({"success": True, "data": data})
             return
 
-        try:
-            info = client.get_usage()
-            info["server_ok"] = True
-            info.update(self._config_status())
-            self._send_json({"success": True, "data": info})
-        except FofaAPIError as e:
-            data = self._config_status()
-            data["server_ok"] = False
-            data["error"] = self._safe_error(e)
-            self._send_json({"success": True, "data": data})
+        self._send_json({"success": True, "data": self._account_info_payload(client)})
 
-    def _handle_search(self):
+    def _account_info_payload(self, client: FofaClient) -> dict:
+        """带缓存与本地计次的 /api/info 数据（见「账户信息缓存」一节）。"""
+        now = time.time()
+        with _account_info_lock:
+            st = dict(_account_info_state)
+            inflight = _account_info_inflight
+
+        # 进程首次 / 换账号（url、key 变了）：同步取一次，页面加载即有数据
+        if st["fetched_at"] == 0.0 or st["client"] != _account_client_signature(client):
+            payload = _fetch_account_info(client)
+            if not payload.get("server_ok"):
+                payload["error"] = self._safe_error(payload.get("error", ""))
+            payload.update(self._config_status())
+            return payload
+
+        due = (now - st["fetched_at"]) >= (
+            _ACCOUNT_INFO_TTL if st["ok"] else _ACCOUNT_INFO_FAIL_TTL
+        )
+        # 先按进入时的快照算好本次响应，再启动后台刷新，
+        # 避免刷新线程抢先写回新值漏进当次响应
+        payload = None
+        if st["data"] is not None:
+            payload = _account_cached_payload(now, st)
+        started = False
+        if due and not inflight and _web_idle_for_account_refresh():
+            started = _start_account_info_refresh(client)
+
+        if payload is None:
+            # 首次尝试失败后的退避期：如实报失败，等退避结束再试
+            payload = {
+                "server_ok": False,
+                "error": self._safe_error(st["error"] or "账户信息获取失败"),
+            }
+        payload["pending_refresh"] = bool(inflight or started)
+        payload.update(self._config_status())
+        return payload
+
+    def _handle_search(self, parsed=None):
         try:
             client = self._require_client()
             if not client:
@@ -3745,7 +4005,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             self._send_error(e)
 
-    def _handle_icon(self):
+    def _handle_icon(self, parsed=None):
         try:
             body = self._read_body()
             target = str(body.get("target", "")).strip()
@@ -3770,7 +4030,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             self._send_error(e)
 
-    def _handle_export(self):
+    def _handle_export(self, parsed=None):
         try:
             if not self._require_client():
                 return
@@ -3939,7 +4199,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         path = Path(filepath)
         self._send_file(path, path.name)
 
-    def _handle_batch(self):
+    def _handle_batch(self, parsed=None):
         try:
             if not self._require_client():
                 return
@@ -4110,8 +4370,8 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         except Exception as e:
             _finish_export_task(task_id, "error", error=self._safe_error(e))
 
-    def _handle_cancel(self):
-        parsed = urlparse(self.path)
+    def _handle_cancel(self, parsed=None):
+        parsed = parsed or urlparse(self.path)
         params = parse_qs(parsed.query)
         task_id = params.get("task_id", [None])[0]
         discard = params.get("discard", ["0"])[0] == "1"
@@ -4307,7 +4567,7 @@ def main():
         sys.exit(1)
     web_mode = args.web or (not args.query and not args.batch_file and not args.check and not args.icon)
 
-    config_manager = ConfigManager()
+    config_manager = ConfigManager(args.config)
     config_file_ready = config_manager.ensure_exists()
 
     print(BANNER)

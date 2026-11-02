@@ -894,7 +894,9 @@ class WebHtmlRenderTest(unittest.TestCase):
         self.assertIn("function sortValueCompare", html)
         self.assertIn("title=\"'+escAttr(h.query)+'\"", fofatoto.WEB_HTML_TEMPLATE)
         self.assertNotIn("title=\"'+escHtml(h.query)+'\"", fofatoto.WEB_HTML_TEMPLATE)
-        self.assertIn("escHtml(d.remain_api_query||\"N/A\")", fofatoto.WEB_HTML_TEMPLATE)
+        # 剩余查询为 0 必须显示 0（本地计次扣减后 0 更常见），不能 || 成 N/A
+        self.assertIn('escHtml(accountValueText(d.remain_api_query))', fofatoto.WEB_HTML_TEMPLATE)
+        self.assertNotIn('d.remain_api_query||"N/A"', fofatoto.WEB_HTML_TEMPLATE)
         self.assertIn("escHtml(vipText)", fofatoto.WEB_HTML_TEMPLATE)
         # 批量模式与深度导出共用 exportPanel；只认 export 时面板会被 updateLayout 藏掉
         self.assertIn(
@@ -952,6 +954,96 @@ class WebHtmlRenderTest(unittest.TestCase):
         self.assertNotIn('String(row.port)==="443"?"https":"http"', src)
         self.assertEqual(src.count("8443"), 1)
         self.assertEqual(src.count("4443"), 1)
+
+
+class ConfigFileOptionTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.folder = Path(self._tmp.name)
+
+    def test_default_config_stays_next_to_application(self):
+        with mock.patch.object(fofatoto, "_app_config_dir", return_value=self.folder):
+            cm = fofatoto.ConfigManager()
+        self.assertEqual(cm.config_file, self.folder / "config.json")
+        self.assertEqual(cm.config_dir, self.folder)
+
+    def test_profile_is_official_only_by_configured_host(self):
+        path = self.folder / "account.json"
+        for url, official in (
+            ("https://fofa.info", True),
+            ("https://en.fofa.info/", True),
+            ("https://fofa.info:443/", True),
+            ("https://fafaapi.info", False),
+            ("https://relay.example", False),
+            ("https://fofa.info.relay.example", False),
+            ("https://fofa.info@relay.example", False),
+        ):
+            with self.subTest(url=url):
+                path.write_text(json.dumps({"url": url, "key": "test-key"}), encoding="utf-8")
+                self.assertEqual(fofatoto.ConfigManager(path).public_status()["official"], official)
+
+    def test_selected_config_loads_and_hot_reloads(self):
+        path = self.folder / "official.json"
+        payload = {
+            "url": "https://fofa.info", "key": "first-test-key",
+            "web_auth": {"enabled": True, "secret": "old-secret"},
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        cm = fofatoto.ConfigManager(path)
+        self.assertEqual(cm.get_client().key, "first-test-key")
+        self.assertEqual(cm.public_status()["config_path"], str(path.resolve()))
+
+        payload["key"] = "second-longer-test-key"
+        payload["web_auth"]["secret"] = "new-secret-longer"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        self.assertEqual(cm.get_client().key, "second-longer-test-key")
+        self.assertEqual(cm.web_auth_secret, "new-secret-longer")
+
+    def test_relative_config_uses_current_working_directory(self):
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(self.folder)
+            cm = fofatoto.ConfigManager(Path("accounts") / "official.json")
+        finally:
+            os.chdir(original_cwd)
+        self.assertEqual(cm.config_file, self.folder / "accounts" / "official.json")
+
+    def test_missing_selected_config_creates_template_at_selected_path(self):
+        path = self.folder / "new-account.json"
+        cm = fofatoto.ConfigManager(path)
+        with mock.patch.object(sys, "stdout", io.StringIO()):
+            self.assertFalse(cm.ensure_exists())
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")), fofatoto.DEFAULT_CONFIG)
+        self.assertFalse((self.folder / "config.json").exists())
+
+    def test_main_uses_selected_config_in_web_check_and_query_modes(self):
+        path = self.folder / "official.json"
+        path.write_text(
+            json.dumps({"url": "https://fofa.info", "key": "selected-test-key"}),
+            encoding="utf-8",
+        )
+        for mode in (["-w"], ["-c"], ['domain="example.com"']):
+            with (
+                self.subTest(mode=mode),
+                mock.patch.object(sys, "argv", ["fofatoto.py", "--config", str(path), *mode]),
+                mock.patch.object(sys, "stdout", io.StringIO()),
+                mock.patch.object(fofatoto, "announce_update"),
+                mock.patch.object(fofatoto, "print_account_status") as account,
+                mock.patch.object(fofatoto, "handle_single_mode") as single,
+                mock.patch.object(fofatoto, "FofaWebServer") as server,
+            ):
+                fofatoto.main()
+                if mode == ["-w"]:
+                    manager = server.call_args.args[0]
+                    self.assertEqual(manager.config_file, path.resolve())
+                    self.assertEqual(manager.key, "selected-test-key")
+                    server.return_value.start.assert_called_once()
+                    account.assert_not_called()
+                else:
+                    self.assertEqual(account.call_args.args[0].key, "selected-test-key")
+                    server.assert_not_called()
+                    self.assertEqual(single.call_count, int(mode != ["-c"]))
 
 
 class PlaceholderKeyTest(unittest.TestCase):
@@ -2873,6 +2965,125 @@ class WebAuthConfigTest(unittest.TestCase):
         self.assertIn("web_auth", status["config_template"])
         self.assertNotIn("top-secret", json.dumps(status))
 
+    def test_unchanged_config_uses_cache(self):
+        cm = self._load({"web_auth": {"enabled": True, "secret": "tok"}})
+        with mock.patch.object(Path, "read_text") as read_text:
+            cm.load()
+        read_text.assert_not_called()
+        self.assertEqual(cm.web_auth_secret, "tok")
+
+    def test_config_saved_during_read_reloads_on_next_request(self):
+        old = {"web_auth": {"enabled": True, "secret": "old-secret"}}
+        new = {"web_auth": {"enabled": True, "secret": "new-secret-longer"}}
+        self.file.write_text(json.dumps(old), encoding="utf-8")
+        cm = fofatoto.ConfigManager()
+        cm.config_file = self.file
+        original_read = Path.read_text
+
+        def save_after_read(path, *args, **kwargs):
+            content = original_read(path, *args, **kwargs)
+            self.file.write_text(json.dumps(new), encoding="utf-8")
+            return content
+
+        old_token = fofatoto.generate_web_auth_token("old-secret")
+        with mock.patch.object(Path, "read_text", save_after_read):
+            cm.load()
+        self.assertEqual(cm.web_auth_secret, "old-secret")
+
+        cm.load()
+        self.assertEqual(cm.web_auth_secret, "new-secret-longer")
+        self.assertFalse(fofatoto.verify_web_auth_token(old_token, cm.web_auth_secret))
+        new_token = fofatoto.generate_web_auth_token("new-secret-longer")
+        self.assertTrue(fofatoto.verify_web_auth_token(new_token, cm.web_auth_secret))
+
+    def test_invalid_config_is_retried_after_fixing_file(self):
+        cm = self._load({"web_auth": {"enabled": True, "secret": "old"}})
+        self.file.write_text('{"web_auth":', encoding="utf-8")
+        with mock.patch.object(sys, "stderr", io.StringIO()):
+            cm.load()
+        self.file.write_text(
+            json.dumps({"web_auth": {"enabled": True, "secret": "fixed-secret"}}),
+            encoding="utf-8",
+        )
+        cm.load()
+        self.assertEqual(cm.web_auth_secret, "fixed-secret")
+
+    def test_concurrent_reloads_keep_values_and_cache_key_together(self):
+        old = {"key": "old-key", "web_auth": {"enabled": True, "secret": "old-secret"}}
+        new = {"key": "new-key-longer", "web_auth": {"enabled": True, "secret": "new-secret-longer"}}
+        self.file.write_text(json.dumps(old), encoding="utf-8")
+        cm = fofatoto.ConfigManager(self.file)
+        old_read = threading.Event()
+        new_progress = threading.Event()
+        allow_old = threading.Event()
+        allow_new = threading.Event()
+        lock = threading.Lock()
+        errors = []
+
+        class ObservedLock:
+            def __enter__(self):
+                if threading.current_thread().name == "new-config-reader":
+                    new_progress.set()
+                lock.acquire()
+
+            def __exit__(self, *args):
+                lock.release()
+
+        # Observe the second reader reaching either the lock or field publication.
+        cm._load_lock = ObservedLock()
+        original_read = Path.read_text
+        original_auth = cm._load_web_auth
+
+        def read_config(path, *args, **kwargs):
+            content = original_read(path, *args, **kwargs)
+            if threading.current_thread().name == "old-config-reader":
+                old_read.set()
+                if not allow_old.wait(3):
+                    raise RuntimeError("old reader was not released")
+            return content
+
+        def load_auth(data):
+            original_auth(data)
+            if threading.current_thread().name == "new-config-reader":
+                new_progress.set()
+                if not allow_new.wait(3):
+                    raise RuntimeError("new reader was not released")
+
+        def load():
+            try:
+                cm.load()
+            except BaseException as exc:
+                errors.append(exc)
+
+        first = threading.Thread(target=load, name="old-config-reader")
+        second = threading.Thread(target=load, name="new-config-reader")
+        with mock.patch.object(Path, "read_text", read_config), mock.patch.object(
+            cm, "_load_web_auth", load_auth
+        ):
+            first.start()
+            try:
+                self.assertTrue(old_read.wait(3))
+                self.file.write_text(json.dumps(new), encoding="utf-8")
+                second.start()
+                self.assertTrue(new_progress.wait(3))
+                allow_old.set()
+                first.join(3)
+                self.assertFalse(first.is_alive())
+            finally:
+                allow_old.set()
+                allow_new.set()
+                first.join(3)
+                if second.ident is not None:
+                    second.join(3)
+        self.assertFalse(second.is_alive())
+        self.assertEqual(errors, [])
+        for _ in range(3):
+            cm.load()
+            self.assertEqual(cm.key, new["key"])
+            self.assertEqual(cm.web_auth_secret, new["web_auth"]["secret"])
+        old_token = fofatoto.generate_web_auth_token("old-secret")
+        self.assertFalse(fofatoto.verify_web_auth_token(old_token, cm.web_auth_secret))
+
 
 class WebAuthGateTest(unittest.TestCase):
     """FofaWebHandler._web_auth_check 门卫：登录页/401 分流、热更新与吊销。"""
@@ -3377,6 +3588,536 @@ class WebAuthLoginTemplateTest(unittest.TestCase):
 
     def test_token_ttl_is_thirty_days(self):
         self.assertEqual(fofatoto.WEB_AUTH_TOKEN_TTL, 30 * 86400)
+
+
+class AccountStatusDisplayTest(unittest.TestCase):
+    def _output(self, info):
+        client = mock.Mock()
+        client.get_usage.return_value = info
+        output = io.StringIO()
+        with mock.patch.object(sys, "stdout", output):
+            fofatoto.print_account_status(client)
+        return output.getvalue()
+
+    def test_official_query_limits_shown_without_point_balances(self):
+        output = self._output({
+            "isvip": True, "fofa_server": True, "vip_level": 2,
+            "remain_api_query": -1, "remain_api_data": -1,
+            "remain_free_point": 5000, "fofa_point": 8,
+        })
+        self.assertIn("剩余查询次数", output)
+        self.assertIn("剩余查询数量", output)
+        self.assertEqual(output.count("—"), 2)
+        self.assertNotIn("F 点", output)
+        self.assertNotIn("5000", output)
+
+    def test_official_zero_monthly_limits_are_shown(self):
+        output = self._output({
+            "remain_api_query": 0, "remain_api_data": 0,
+            "remain_free_point": 0, "fofa_point": 0,
+        })
+        for label in ("剩余查询次数", "剩余查询数量"):
+            self.assertIn(label, output)
+        self.assertNotIn("F 点", output)
+
+    def test_official_blank_query_limits_show_placeholders(self):
+        output = self._output({"remain_api_query": "", "remain_api_data": " \t"})
+        self.assertIn("剩余查询次数", output)
+        self.assertIn("剩余查询数量", output)
+        self.assertEqual(output.count("—"), 2)
+
+    def test_relay_keeps_its_own_quota_display(self):
+        output = self._output({
+            "relay": True, "isvip": True,
+            "remain_api_query": "不限", "today_remaining": 97,
+        })
+        self.assertIn("剩余查询", output)
+        self.assertIn("不限", output)
+        self.assertIn("今日剩余", output)
+        self.assertNotIn("F 点", output)
+
+
+class AccountInfoCacheTest(unittest.TestCase):
+    """/api/info 缓存与本地计次：命中缓存不打真实接口，中转站余额本地扣减，
+    闲时（无导出任务）才后台刷新；忙时与失败退避期内都不触发真实请求。"""
+
+    USAGE = {
+        "isvip": True,
+        "remain_api_query": 100,
+        "expiration": "2027-01-01",
+        "vip_level": "2",
+    }
+
+    def setUp(self):
+        fofatoto._reset_account_info_state()
+        self.addCleanup(fofatoto._reset_account_info_state)
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+
+    def _client(self, outcomes, url="https://fofa.info", key="k"):
+        """outcomes 逐次弹出（最后一个重复使用）：dict=成功载荷，str=抛 FofaAPIError"""
+        client = mock.Mock()
+        client.base_url = url
+        client.key = key
+        calls = []
+
+        def get_usage():
+            calls.append(time.time())
+            item = outcomes.pop(0) if len(outcomes) > 1 else outcomes[0]
+            if isinstance(item, str):
+                raise fofatoto.FofaAPIError(item)
+            return dict(item)
+
+        client.get_usage.side_effect = get_usage
+        return client, calls
+
+    def _handler(self, client):
+        handler = fofatoto.FofaWebHandler.__new__(fofatoto.FofaWebHandler)
+        handler.config_manager = fofatoto.ConfigManager()
+        handler.config_manager.config_file = Path(self._tmp.name) / "config.json"
+        handler._current_client = mock.Mock(return_value=client)
+        handler._send_json = mock.Mock()
+        return handler
+
+    def _served(self, handler) -> dict:
+        return handler._send_json.call_args[0][0]["data"]
+
+    def _age_state(self, seconds: float) -> None:
+        with fofatoto._account_info_lock:
+            fofatoto._account_info_state["fetched_at"] -= seconds
+
+    @staticmethod
+    def _wait_for(condition, timeout=3.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if condition():
+                return True
+            time.sleep(0.02)
+        return condition()
+
+    def test_first_call_fetches_and_caches(self):
+        client, calls = self._client([self.USAGE])
+        handler = self._handler(client)
+        handler._handle_info()
+        d = self._served(handler)
+        self.assertTrue(d["server_ok"])
+        self.assertEqual(d["remain_api_query"], 100)
+        self.assertEqual(len(calls), 1)
+
+    def test_old_refresh_cannot_overwrite_newer_account_cache(self):
+        for failure in (False, True):
+            for switch_back in (False, True):
+                with self.subTest(failure=failure, switch_back=switch_back):
+                    fofatoto._reset_account_info_state()
+                    old, _ = self._client([self.USAGE], key="old-key")
+                    new, calls = self._client(
+                        [dict(self.USAGE, remain_api_query=200)], key="new-key"
+                    )
+                    handler = self._handler(old)
+                    handler._handle_info()
+                    entered = threading.Event()
+                    release = threading.Event()
+
+                    def delayed_usage():
+                        entered.set()
+                        if not release.wait(3):
+                            raise RuntimeError("refresh was not released")
+                        if failure:
+                            raise fofatoto.FofaAPIError("old account refresh failed")
+                        return dict(self.USAGE, remain_api_query=80)
+
+                    old.get_usage.side_effect = delayed_usage
+                    self._age_state(fofatoto._ACCOUNT_INFO_TTL + 1)
+                    handler._handle_info()
+                    try:
+                        self.assertTrue(entered.wait(3))
+                        handler._current_client.return_value = new
+                        handler._handle_info()
+                        current = new
+                        if switch_back:
+                            current, _ = self._client(
+                                [dict(self.USAGE, remain_api_query=300)], key="old-key"
+                            )
+                            handler._current_client.return_value = current
+                            handler._handle_info()
+                        expected = dict(fofatoto._account_info_state)
+                    finally:
+                        release.set()
+                        self.assertTrue(self._wait_for(lambda: not fofatoto._account_info_inflight))
+                    self.assertEqual(fofatoto._account_info_state, expected)
+                    current.get_usage.reset_mock()
+                    handler._handle_info()
+                    self.assertEqual(self._served(handler)["remain_api_query"], 300 if switch_back else 200)
+                    self.assertTrue(self._served(handler)["server_ok"])
+                    current.get_usage.assert_not_called()
+                    self.assertEqual(len(calls), 1)
+
+    def test_refresh_delayed_before_thread_start_cannot_replace_new_account(self):
+        old, _ = self._client([self.USAGE], key="old-key")
+        new, _ = self._client([dict(self.USAGE, remain_api_query=200)], key="new-key")
+        handler = self._handler(old)
+        handler._handle_info()
+        self._age_state(fofatoto._ACCOUNT_INFO_TTL + 1)
+        with mock.patch.object(fofatoto.threading, "Thread") as thread:
+            handler._handle_info()
+            worker = thread.call_args.kwargs["target"]
+            handler._current_client.return_value = new
+            handler._handle_info()
+            expected = dict(fofatoto._account_info_state)
+            worker()
+        self.assertEqual(fofatoto._account_info_state, expected)
+        handler._handle_info()
+        self.assertEqual(self._served(handler)["remain_api_query"], 200)
+
+    def test_late_initial_fetch_cannot_replace_newer_account(self):
+        old, _ = self._client([self.USAGE], key="old-key")
+        new, _ = self._client([dict(self.USAGE, remain_api_query=200)], key="new-key")
+        entered = threading.Event()
+        release = threading.Event()
+
+        def delayed_usage():
+            entered.set()
+            if not release.wait(3):
+                raise RuntimeError("initial fetch was not released")
+            return dict(self.USAGE)
+
+        old.get_usage.side_effect = delayed_usage
+        worker = threading.Thread(target=fofatoto._fetch_account_info, args=(old,))
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(3))
+            fofatoto._fetch_account_info(new)
+            expected = dict(fofatoto._account_info_state)
+        finally:
+            release.set()
+            worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(fofatoto._account_info_state, expected)
+
+    def test_old_refresh_cannot_interrupt_account_switch_in_progress(self):
+        old, _ = self._client([self.USAGE], key="old-key")
+        new, _ = self._client([self.USAGE], key="new-key")
+        fofatoto._fetch_account_info(old)
+        entered = threading.Event()
+        release = threading.Event()
+
+        def delayed_usage():
+            entered.set()
+            if not release.wait(3):
+                raise RuntimeError("account switch was not released")
+            return dict(self.USAGE, remain_api_query=200)
+
+        new.get_usage.side_effect = delayed_usage
+        worker = threading.Thread(target=fofatoto._fetch_account_info, args=(new,))
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(3))
+            self.assertFalse(fofatoto._start_account_info_refresh(old))
+        finally:
+            release.set()
+            worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(fofatoto._account_info_state["client"], (new.base_url, new.key))
+        self.assertEqual(fofatoto._account_info_state["data"]["remain_api_query"], 200)
+
+    def test_cache_hit_no_refetch_and_local_decrement(self):
+        client, calls = self._client([dict(self.USAGE, relay=True)])
+        handler = self._handler(client)
+        handler._handle_info()
+        fofatoto._note_quota_used(30, client)
+        handler._handle_info()
+        d = self._served(handler)
+        self.assertEqual(len(calls), 1)  # 缓存期内不再打真实接口
+        self.assertTrue(d["server_ok"])
+        self.assertEqual(d["remain_api_query"], 70)
+        self.assertEqual(d["local_used"], 30)
+        self.assertFalse(d["pending_refresh"])
+
+    def test_official_negative_limits_are_not_changed_by_local_usage(self):
+        usage = dict(
+            self.USAGE, remain_api_query=-1, remain_api_data=-1,
+            remain_free_point=5000, fofa_point=8,
+        )
+        client, calls = self._client([usage])
+        handler = self._handler(client)
+        handler._handle_info()
+        fofatoto._note_quota_used(1, client)
+        handler._handle_info()
+        d = self._served(handler)
+        for name in ("remain_api_query", "remain_api_data", "remain_free_point", "fofa_point"):
+            self.assertEqual(d[name], usage[name])
+        self.assertEqual(len(calls), 1)
+
+    def test_official_monthly_queries_are_not_decremented_by_result_rows(self):
+        usage = dict(
+            self.USAGE, remain_api_query=100, remain_api_data=20000,
+            remain_free_point=5000, fofa_point=8,
+        )
+        client, calls = self._client([usage])
+        handler = self._handler(client)
+        handler._handle_info()
+        fofatoto._note_quota_used(10000, client)
+        handler._handle_info()
+        d = self._served(handler)
+        for name in ("remain_api_query", "remain_api_data", "remain_free_point", "fofa_point"):
+            self.assertEqual(d[name], usage[name])
+        self.assertEqual(len(calls), 1)
+
+    def test_numeric_string_remaining_decremented(self):
+        client, _ = self._client(
+            [{"relay": True, "valid": True, "remain_api_query": "500"}]
+        )
+        handler = self._handler(client)
+        handler._handle_info()
+        fofatoto._note_quota_used(20, client)
+        handler._handle_info()
+        d = self._served(handler)
+        self.assertEqual(d["remain_api_query"], 480)
+
+    def test_na_remaining_kept_but_local_used_reported(self):
+        client, _ = self._client(
+            [{"relay": True, "valid": True, "remain_api_query": "N/A"}]
+        )
+        handler = self._handler(client)
+        handler._handle_info()
+        fofatoto._note_quota_used(5, client)
+        handler._handle_info()
+        d = self._served(handler)
+        self.assertEqual(d["remain_api_query"], "N/A")
+        self.assertEqual(d["local_used"], 5)
+
+    def test_failure_served_during_backoff_without_refetch(self):
+        client, calls = self._client(["获取用量失败: 81100"])
+        handler = self._handler(client)
+        handler._handle_info()
+        d = self._served(handler)
+        self.assertFalse(d["server_ok"])
+        self.assertIn("获取用量失败", d["error"])
+        handler._handle_info()  # 退避期内：不再打真实接口
+        d2 = self._served(handler)
+        self.assertFalse(d2["server_ok"])
+        self.assertEqual(len(calls), 1)
+
+    def test_backoff_elapsed_idle_retries_in_background(self):
+        client, calls = self._client(["限流了", self.USAGE])
+        handler = self._handler(client)
+        handler._handle_info()  # 失败入缓存
+        self._age_state(fofatoto._ACCOUNT_INFO_FAIL_TTL + 1)
+        handler._handle_info()  # 退避结束且闲时 → 后台重试，先如实回失败
+        d = self._served(handler)
+        self.assertFalse(d["server_ok"])
+        self.assertTrue(d["pending_refresh"])
+        self.assertTrue(
+            self._wait_for(
+                lambda: len(calls) == 2 and not fofatoto._account_info_inflight
+            )
+        )
+        handler._handle_info()  # 后台已写入成功缓存
+        d2 = self._served(handler)
+        self.assertTrue(d2["server_ok"])
+        self.assertEqual(d2["remain_api_query"], 100)
+
+    def test_stale_cache_refreshes_in_background_when_idle(self):
+        client, calls = self._client(
+            [dict(self.USAGE, relay=True), dict(self.USAGE, relay=True, remain_api_query=55)]
+        )
+        handler = self._handler(client)
+        handler._handle_info()
+        fofatoto._note_quota_used(10, client)
+        self._age_state(fofatoto._ACCOUNT_INFO_TTL + 1)
+        handler._handle_info()  # 过期且闲时 → 立即回旧值（本地扣减）+ 后台刷新
+        d = self._served(handler)
+        self.assertEqual(d["remain_api_query"], 90)
+        self.assertEqual(d["local_used"], 10)
+        self.assertTrue(d["pending_refresh"])
+        self.assertTrue(
+            self._wait_for(
+                lambda: len(calls) == 2 and not fofatoto._account_info_inflight
+            )
+        )
+        handler._handle_info()  # 新缓存（55）；刷新时本地计数已重置，不再扣减
+        d2 = self._served(handler)
+        self.assertEqual(d2["remain_api_query"], 55)
+        self.assertNotIn("local_used", d2)
+
+    def test_busy_task_blocks_background_refresh(self):
+        client, calls = self._client([self.USAGE])
+        handler = self._handler(client)
+        handler._handle_info()
+        self._age_state(fofatoto._ACCOUNT_INFO_TTL + 1)
+        task = fofatoto.ExportTask(task_id="t-info-busy", status="running")
+        with fofatoto._export_lock:
+            fofatoto._export_tasks["t-info-busy"] = task
+        self.addCleanup(lambda: fofatoto._export_tasks.pop("t-info-busy", None))
+        handler._handle_info()  # 忙时：只回旧值，不触发刷新
+        d = self._served(handler)
+        self.assertEqual(d["remain_api_query"], 100)
+        self.assertFalse(d["pending_refresh"])
+        time.sleep(0.2)
+        self.assertEqual(len(calls), 1)
+
+    def test_account_switch_refetches_synchronously(self):
+        client1, calls1 = self._client([self.USAGE])
+        handler1 = self._handler(client1)
+        handler1._handle_info()
+        client2, calls2 = self._client(
+            [dict(self.USAGE, remain_api_query=7)],
+            url="https://relay.example",
+            key="k2",
+        )
+        handler2 = self._handler(client2)
+        handler2._handle_info()  # url/key 变化 → 缓存立即失效，同步重取
+        d = self._served(handler2)
+        self.assertEqual(d["remain_api_query"], 7)
+        self.assertEqual(len(calls2), 1)
+        self.assertEqual(len(calls1), 1)
+
+    def test_account_switch_after_first_failure_fetches_new_account(self):
+        client1, calls1 = self._client(["old-account-error"])
+        handler1 = self._handler(client1)
+        handler1._handle_info()
+
+        client2, calls2 = self._client(
+            [dict(self.USAGE, remain_api_query=7)], key="new-key"
+        )
+        handler2 = self._handler(client2)
+        handler2._handle_info()
+        d = self._served(handler2)
+        self.assertEqual(len(calls2), 1)
+        self.assertTrue(d["server_ok"])
+        self.assertEqual(d["remain_api_query"], 7)
+        self.assertEqual(len(calls1), 1)
+
+    def test_failed_account_switch_uses_backoff_without_old_data(self):
+        client1, _ = self._client([self.USAGE])
+        self._handler(client1)._handle_info()
+
+        client2, calls2 = self._client(["new-account-error"], key="new-key")
+        handler2 = self._handler(client2)
+        for _ in range(3):
+            handler2._handle_info()
+            d = self._served(handler2)
+            self.assertFalse(d["server_ok"])
+            self.assertEqual(d["error"], "new-account-error")
+            self.assertNotIn("remain_api_query", d)
+        self.assertEqual(len(calls2), 1)
+
+    def test_failed_refresh_keeps_same_account_cache_and_local_usage(self):
+        client, calls = self._client([dict(self.USAGE, relay=True), "refresh-error"])
+        handler = self._handler(client)
+        handler._handle_info()
+        fofatoto._note_quota_used(10, client)
+        self._age_state(fofatoto._ACCOUNT_INFO_TTL + 1)
+        handler._handle_info()
+        self.assertTrue(self._served(handler)["pending_refresh"])
+        self.assertTrue(
+            self._wait_for(
+                lambda: len(calls) == 2 and not fofatoto._account_info_inflight
+            )
+        )
+
+        handler._handle_info()
+        d = self._served(handler)
+        self.assertTrue(d["server_ok"])
+        self.assertEqual(d["remain_api_query"], 90)
+        self.assertEqual(d["local_used"], 10)
+        self.assertFalse(d["pending_refresh"])
+        self.assertEqual(len(calls), 2)
+
+    def test_inflight_old_query_does_not_decrement_new_account_balance(self):
+        for old_url, new_url, old_key, new_key in (
+            ("https://fafaapi.info", "https://fafaapi.info", "old-key", "new-longer-key"),
+            ("https://fafaapi.info", "https://api.fafaapi.info", "same-key", "same-key"),
+        ):
+            with self.subTest(new_url=new_url, key_changed=old_key != new_key):
+                fofatoto._reset_account_info_state()
+                path = Path(self._tmp.name) / "selected.json"
+                path.write_text(json.dumps({"url": old_url, "key": old_key}), encoding="utf-8")
+                handler = fofatoto.FofaWebHandler.__new__(fofatoto.FofaWebHandler)
+                handler.config_manager = fofatoto.ConfigManager(path)
+                handler._send_json = mock.Mock()
+                started, release = threading.Event(), threading.Event()
+                errors = []
+
+                def old_query():
+                    try:
+                        old_client.search("q", size=2, fields="host", max_retries=1)
+                    except Exception as exc:
+                        errors.append(exc)
+
+                thread = threading.Thread(target=old_query)
+
+                def urlopen(url, timeout=None):
+                    if "/api/v1/search/all" in url:
+                        if threading.current_thread() is thread:
+                            started.set()
+                            if not release.wait(3):
+                                raise TimeoutError("test query was not released")
+                            return FakeResponse({"error": False, "size": 2, "results": [["a.example"], ["b.example"]]})
+                        return FakeResponse({"error": False, "size": 1, "results": [["c.example"]]})
+                    return FakeResponse({"valid": True, "totalRemaining": 100})
+
+                with mock.patch.object(urllib.request, "urlopen", side_effect=urlopen):
+                    handler._handle_info()
+                    old_client = handler.config_manager.get_client()
+                    thread.start()
+                    try:
+                        self.assertTrue(started.wait(3))
+                        path.write_text(json.dumps({"url": new_url, "key": new_key}), encoding="utf-8")
+                        handler._handle_info()
+                        self.assertEqual(self._served(handler)["remain_api_query"], 100)
+                        release.set()
+                        thread.join(3)
+                        self.assertFalse(thread.is_alive())
+                        self.assertFalse(errors)
+
+                        handler._handle_info()
+                        d = self._served(handler)
+                        self.assertEqual(d["remain_api_query"], 100)
+                        self.assertNotIn("local_used", d)
+
+                        handler.config_manager.get_client().search("q", size=1, fields="host", max_retries=1)
+                        handler._handle_info()
+                        self.assertEqual(self._served(handler)["remain_api_query"], 99)
+                        self.assertEqual(self._served(handler)["local_used"], 1)
+                    finally:
+                        release.set()
+                        thread.join(3)
+
+    def test_switching_back_refetches_balance_and_counts_current_account(self):
+        client_a, calls_a = self._client([
+            dict(self.USAGE, relay=True),
+            dict(self.USAGE, relay=True, remain_api_query=70),
+        ])
+        client_b, _ = self._client([dict(self.USAGE, relay=True, remain_api_query=200)], key="key-b")
+        handler_a, handler_b = self._handler(client_a), self._handler(client_b)
+        handler_a._handle_info()
+        fofatoto._note_quota_used(30, client_a)
+        handler_b._handle_info()
+        fofatoto._note_quota_used(5, client_b)
+        handler_b._handle_info()
+        self.assertEqual(self._served(handler_b)["remain_api_query"], 195)
+        handler_a._handle_info()
+        fofatoto._note_quota_used(2, client_a)
+        handler_a._handle_info()
+        self.assertEqual(self._served(handler_a)["remain_api_query"], 68)
+        self.assertEqual(self._served(handler_a)["local_used"], 2)
+        self.assertEqual(len(calls_a), 2)
+
+    def test_search_counts_quota_locally(self):
+        payload = {
+            "error": False,
+            "size": 2,
+            "results": [["a.com", "1.1.1.1"], ["b.com", "2.2.2.2"]],
+        }
+        client = fofatoto.FofaClient("https://fofa.info", "k")
+        with mock.patch.object(
+            urllib.request, "urlopen", lambda url, timeout=None: FakeResponse(payload)
+        ):
+            client.search("q", size=2, fields="host,ip")
+        with fofatoto._account_info_lock:
+            used = fofatoto._local_quota_used
+        self.assertEqual(used, 2)
 
 
 if __name__ == "__main__":
