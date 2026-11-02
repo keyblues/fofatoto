@@ -3008,6 +3008,82 @@ class WebAuthConfigTest(unittest.TestCase):
         cm.load()
         self.assertEqual(cm.web_auth_secret, "fixed-secret")
 
+    def test_concurrent_reloads_keep_values_and_cache_key_together(self):
+        old = {"key": "old-key", "web_auth": {"enabled": True, "secret": "old-secret"}}
+        new = {"key": "new-key-longer", "web_auth": {"enabled": True, "secret": "new-secret-longer"}}
+        self.file.write_text(json.dumps(old), encoding="utf-8")
+        cm = fofatoto.ConfigManager(self.file)
+        old_read = threading.Event()
+        new_progress = threading.Event()
+        allow_old = threading.Event()
+        allow_new = threading.Event()
+        lock = threading.Lock()
+        errors = []
+
+        class ObservedLock:
+            def __enter__(self):
+                if threading.current_thread().name == "new-config-reader":
+                    new_progress.set()
+                lock.acquire()
+
+            def __exit__(self, *args):
+                lock.release()
+
+        # Observe the second reader reaching either the lock or field publication.
+        cm._load_lock = ObservedLock()
+        original_read = Path.read_text
+        original_auth = cm._load_web_auth
+
+        def read_config(path, *args, **kwargs):
+            content = original_read(path, *args, **kwargs)
+            if threading.current_thread().name == "old-config-reader":
+                old_read.set()
+                if not allow_old.wait(3):
+                    raise RuntimeError("old reader was not released")
+            return content
+
+        def load_auth(data):
+            original_auth(data)
+            if threading.current_thread().name == "new-config-reader":
+                new_progress.set()
+                if not allow_new.wait(3):
+                    raise RuntimeError("new reader was not released")
+
+        def load():
+            try:
+                cm.load()
+            except BaseException as exc:
+                errors.append(exc)
+
+        first = threading.Thread(target=load, name="old-config-reader")
+        second = threading.Thread(target=load, name="new-config-reader")
+        with mock.patch.object(Path, "read_text", read_config), mock.patch.object(
+            cm, "_load_web_auth", load_auth
+        ):
+            first.start()
+            try:
+                self.assertTrue(old_read.wait(3))
+                self.file.write_text(json.dumps(new), encoding="utf-8")
+                second.start()
+                self.assertTrue(new_progress.wait(3))
+                allow_old.set()
+                first.join(3)
+                self.assertFalse(first.is_alive())
+            finally:
+                allow_old.set()
+                allow_new.set()
+                first.join(3)
+                if second.ident is not None:
+                    second.join(3)
+        self.assertFalse(second.is_alive())
+        self.assertEqual(errors, [])
+        for _ in range(3):
+            cm.load()
+            self.assertEqual(cm.key, new["key"])
+            self.assertEqual(cm.web_auth_secret, new["web_auth"]["secret"])
+        old_token = fofatoto.generate_web_auth_token("old-secret")
+        self.assertFalse(fofatoto.verify_web_auth_token(old_token, cm.web_auth_secret))
+
 
 class WebAuthGateTest(unittest.TestCase):
     """FofaWebHandler._web_auth_check 门卫：登录页/401 分流、热更新与吊销。"""
@@ -3627,6 +3703,122 @@ class AccountInfoCacheTest(unittest.TestCase):
         self.assertTrue(d["server_ok"])
         self.assertEqual(d["remain_api_query"], 100)
         self.assertEqual(len(calls), 1)
+
+    def test_old_refresh_cannot_overwrite_newer_account_cache(self):
+        for failure in (False, True):
+            for switch_back in (False, True):
+                with self.subTest(failure=failure, switch_back=switch_back):
+                    fofatoto._reset_account_info_state()
+                    old, _ = self._client([self.USAGE], key="old-key")
+                    new, calls = self._client(
+                        [dict(self.USAGE, remain_api_query=200)], key="new-key"
+                    )
+                    handler = self._handler(old)
+                    handler._handle_info()
+                    entered = threading.Event()
+                    release = threading.Event()
+
+                    def delayed_usage():
+                        entered.set()
+                        if not release.wait(3):
+                            raise RuntimeError("refresh was not released")
+                        if failure:
+                            raise fofatoto.FofaAPIError("old account refresh failed")
+                        return dict(self.USAGE, remain_api_query=80)
+
+                    old.get_usage.side_effect = delayed_usage
+                    self._age_state(fofatoto._ACCOUNT_INFO_TTL + 1)
+                    handler._handle_info()
+                    try:
+                        self.assertTrue(entered.wait(3))
+                        handler._current_client.return_value = new
+                        handler._handle_info()
+                        current = new
+                        if switch_back:
+                            current, _ = self._client(
+                                [dict(self.USAGE, remain_api_query=300)], key="old-key"
+                            )
+                            handler._current_client.return_value = current
+                            handler._handle_info()
+                        expected = dict(fofatoto._account_info_state)
+                    finally:
+                        release.set()
+                        self.assertTrue(self._wait_for(lambda: not fofatoto._account_info_inflight))
+                    self.assertEqual(fofatoto._account_info_state, expected)
+                    current.get_usage.reset_mock()
+                    handler._handle_info()
+                    self.assertEqual(self._served(handler)["remain_api_query"], 300 if switch_back else 200)
+                    self.assertTrue(self._served(handler)["server_ok"])
+                    current.get_usage.assert_not_called()
+                    self.assertEqual(len(calls), 1)
+
+    def test_refresh_delayed_before_thread_start_cannot_replace_new_account(self):
+        old, _ = self._client([self.USAGE], key="old-key")
+        new, _ = self._client([dict(self.USAGE, remain_api_query=200)], key="new-key")
+        handler = self._handler(old)
+        handler._handle_info()
+        self._age_state(fofatoto._ACCOUNT_INFO_TTL + 1)
+        with mock.patch.object(fofatoto.threading, "Thread") as thread:
+            handler._handle_info()
+            worker = thread.call_args.kwargs["target"]
+            handler._current_client.return_value = new
+            handler._handle_info()
+            expected = dict(fofatoto._account_info_state)
+            worker()
+        self.assertEqual(fofatoto._account_info_state, expected)
+        handler._handle_info()
+        self.assertEqual(self._served(handler)["remain_api_query"], 200)
+
+    def test_late_initial_fetch_cannot_replace_newer_account(self):
+        old, _ = self._client([self.USAGE], key="old-key")
+        new, _ = self._client([dict(self.USAGE, remain_api_query=200)], key="new-key")
+        entered = threading.Event()
+        release = threading.Event()
+
+        def delayed_usage():
+            entered.set()
+            if not release.wait(3):
+                raise RuntimeError("initial fetch was not released")
+            return dict(self.USAGE)
+
+        old.get_usage.side_effect = delayed_usage
+        worker = threading.Thread(target=fofatoto._fetch_account_info, args=(old,))
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(3))
+            fofatoto._fetch_account_info(new)
+            expected = dict(fofatoto._account_info_state)
+        finally:
+            release.set()
+            worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(fofatoto._account_info_state, expected)
+
+    def test_old_refresh_cannot_interrupt_account_switch_in_progress(self):
+        old, _ = self._client([self.USAGE], key="old-key")
+        new, _ = self._client([self.USAGE], key="new-key")
+        fofatoto._fetch_account_info(old)
+        entered = threading.Event()
+        release = threading.Event()
+
+        def delayed_usage():
+            entered.set()
+            if not release.wait(3):
+                raise RuntimeError("account switch was not released")
+            return dict(self.USAGE, remain_api_query=200)
+
+        new.get_usage.side_effect = delayed_usage
+        worker = threading.Thread(target=fofatoto._fetch_account_info, args=(new,))
+        worker.start()
+        try:
+            self.assertTrue(entered.wait(3))
+            self.assertFalse(fofatoto._start_account_info_refresh(old))
+        finally:
+            release.set()
+            worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(fofatoto._account_info_state["client"], (new.base_url, new.key))
+        self.assertEqual(fofatoto._account_info_state["data"]["remain_api_query"], 200)
 
     def test_cache_hit_no_refetch_and_local_decrement(self):
         client, calls = self._client([dict(self.USAGE, relay=True)])

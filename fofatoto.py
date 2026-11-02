@@ -432,7 +432,7 @@ td{max-width:240px}
 var fieldCategories=__FIELD_CATEGORIES_JSON__;
 var selectedFields=__DEFAULT_FIELDS_JSON__;
 var currentMode="instant",currentResults=[],currentTotal=0,currentColumns=[],currentView=[],rowHeight=0,OVERSCAN=10,previewRendered=false,exportTaskId=null,exportPollTimer=null,sortColumn=null,sortAsc=true,historyActiveIndex=-1,historyVisibleItems=[],vsLastWindow=null;
-var ACCOUNT_REFRESH_INTERVAL=180000,accountRefreshTimer=null,lastAccountRefresh=0,accountInfoRepoll=false;
+var ACCOUNT_REFRESH_INTERVAL=180000,accountRefreshTimer=null,lastAccountRefresh=0,accountInfoRepoll=null;
 function initFieldSelector(){renderChips();renderFieldPanel();var ctrl=document.getElementById("fieldControl");var trig=document.createElement("div");trig.className="field-trigger";trig.id="fieldTrigger";trig.textContent="+";trig.addEventListener("click",function(e){e.stopPropagation();toggleFieldPanel()});ctrl.appendChild(trig);document.getElementById("fpSearch").addEventListener("input",filterFields);var fieldRowDown=false;document.addEventListener("mousedown",function(e){fieldRowDown=!!(e.target.closest&&e.target.closest(".field-row"))},true);document.addEventListener("click",function(){var p=document.getElementById("fieldPanel");if(p.classList.contains("open")&&!fieldRowDown)p.classList.remove("open")});document.addEventListener("keydown",function(e){if(e.key==="Escape")document.getElementById("fieldPanel").classList.remove("open")})}
 var dragField=null;
 function clearChipDropClasses(){document.querySelectorAll("#fieldControl .chip").forEach(function(el){el.classList.remove("drop-before","drop-after")})}
@@ -459,7 +459,7 @@ function formatApiError(data,fallback){var msg=(data&&data.error)||fallback||"�
 function accountValueText(value){var text=value==null?"":String(value).trim();return text===""||text==="-1"?"—":text}
 function accountIdentityHtml(d){if(!d.official)return "";var name=String(d.username||"").trim()||String(d.nickname||"").trim()||"未命名用户",avatar=String(d.avatar||"").trim();return '<span class="account-user"><span class="account-avatar" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><circle cx="12" cy="7" r="4"/><path d="M4 22v-2a8 8 0 0 1 16 0v2z"/></svg>'+(avatar?'<img src="'+escAttr(avatar)+'" alt="" referrerpolicy="no-referrer" onerror="this.remove()">':"")+'</span><span class="account-name" title="'+escAttr(name)+'">'+escHtml(name)+'</span></span>'}
 function accountQuotaHtml(d){return [["remain_api_query","剩余查询次数"],["remain_api_data","剩余查询数量"]].map(function(item){return item[1]+": <strong>"+escHtml(accountValueText(d[item[0]]))+"</strong>"}).join(" | ")}
-function loadAccountInfo(silent){return fetch("/api/info").then(function(r){return r.json()}).then(function(data){var d=data.data||{};if(!d.pending_refresh)accountInfoRepoll=false;if(d.pending_refresh&&!accountInfoRepoll){accountInfoRepoll=true;setTimeout(function(){loadAccountInfo(true)},2000)}toggleLogoutItem(!!d.web_auth_enabled);if(d.configured===false){showConfigNotice(d);document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">未配置</span> 等待 API Key';return}hideConfigNotice();if(data.success){if(d.relay){var vClass=d.isvip?"active":"inactive",vText=d.isvip?"有效":"无效";var h=accountIdentityHtml(d)+'<span class="vip-badge inactive">中转站</span> <span class="vip-badge '+vClass+'">'+vText+'</span> '+"剩余查询: <strong>"+escHtml(accountValueText(d.remain_api_query))+"</strong>";if(d.today_remaining!==null&&d.today_remaining!==undefined)h+=" | 今日剩余: <strong>"+escHtml(accountValueText(d.today_remaining))+"</strong>";h+=" | 过期: "+escHtml(accountValueText(d.expiration));document.getElementById("accountInfo").innerHTML=h}else{var vipClass=d.isvip?"active":"inactive",vipText=d.isvip==null||d.isvip===""?"":(d.isvip?"VIP "+(d.vip_level||""):"未激活"),serverText=d.server_ok?"正常":"异常",serverClass=d.server_ok?"ok":"fail";document.getElementById("accountInfo").innerHTML=accountIdentityHtml(d)+(vipText?'<span class="vip-badge '+vipClass+'">'+escHtml(vipText)+'</span> ':"")+'服务器: <span class="server-status '+serverClass+'">'+serverText+'</span> | '+accountQuotaHtml(d)+' | 过期: '+escHtml(accountValueText(d.expiration));if(d.server_ok===false&&d.error&&!silent)showMessage("error",d.error)}}else{if(!silent){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 账户信息不可用';showMessage("error",formatApiError(data,"账户信息不可用"))}}}).catch(function(e){if(!silent){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 本地服务不可用';showMessage("error","网络错误: "+e.message)}}).finally(function(){updateLayout()})}
+function loadAccountInfo(silent){return fetch("/api/info").then(function(r){return r.json()}).then(function(data){var d=data.data||{};if(!d.pending_refresh){clearTimeout(accountInfoRepoll);accountInfoRepoll=null}else if(accountInfoRepoll===null){accountInfoRepoll=setTimeout(function(){accountInfoRepoll=null;loadAccountInfo(true)},2000)}toggleLogoutItem(!!d.web_auth_enabled);if(d.configured===false){showConfigNotice(d);document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">未配置</span> 等待 API Key';return}hideConfigNotice();if(data.success){if(d.relay){var vClass=d.isvip?"active":"inactive",vText=d.isvip?"有效":"无效";var h=accountIdentityHtml(d)+'<span class="vip-badge inactive">中转站</span> <span class="vip-badge '+vClass+'">'+vText+'</span> '+"剩余查询: <strong>"+escHtml(accountValueText(d.remain_api_query))+"</strong>";if(d.today_remaining!==null&&d.today_remaining!==undefined)h+=" | 今日剩余: <strong>"+escHtml(accountValueText(d.today_remaining))+"</strong>";h+=" | 过期: "+escHtml(accountValueText(d.expiration));document.getElementById("accountInfo").innerHTML=h}else{var vipClass=d.isvip?"active":"inactive",vipText=d.isvip==null||d.isvip===""?"":(d.isvip?"VIP "+(d.vip_level||""):"未激活"),serverText=d.server_ok?"正常":"异常",serverClass=d.server_ok?"ok":"fail";document.getElementById("accountInfo").innerHTML=accountIdentityHtml(d)+(vipText?'<span class="vip-badge '+vipClass+'">'+escHtml(vipText)+'</span> ':"")+'服务器: <span class="server-status '+serverClass+'">'+serverText+'</span> | '+accountQuotaHtml(d)+' | 过期: '+escHtml(accountValueText(d.expiration));if(d.server_ok===false&&d.error&&!silent)showMessage("error",d.error)}}else{if(!silent){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 账户信息不可用';showMessage("error",formatApiError(data,"账户信息不可用"))}}}).catch(function(e){if(!silent){document.getElementById("accountInfo").innerHTML='<span class="vip-badge inactive">异常</span> 本地服务不可用';showMessage("error","网络错误: "+e.message)}}).finally(function(){updateLayout()})}
 function startAccountRefresh(){if(accountRefreshTimer)return;accountRefreshTimer=setInterval(function(){loadAccountInfo(true);lastAccountRefresh=Date.now()},ACCOUNT_REFRESH_INTERVAL)}
 function stopAccountRefresh(){if(accountRefreshTimer){clearInterval(accountRefreshTimer);accountRefreshTimer=null}}
 function onVisibilityChange(){if(document.hidden){stopAccountRefresh()}else{var elapsed=Date.now()-lastAccountRefresh;if(elapsed>=ACCOUNT_REFRESH_INTERVAL){loadAccountInfo(true);lastAccountRefresh=Date.now()}startAccountRefresh()}}
@@ -606,6 +606,7 @@ class ConfigManager:
         self.web_auth_secret = ""
         # 成功读取后记录 (路径, mtime_ns, size)；None 表示尚未读过
         self._cache_key: Optional[tuple] = None
+        self._load_lock = threading.Lock()
 
     def ensure_exists(self) -> bool:
         if self.config_file.exists():
@@ -632,24 +633,25 @@ class ConfigManager:
         缓存读取前的文件状态，读取期间保存的配置留到下次调用重新读取。
         解析失败不落缓存键，下次调用照旧重试，与旧行为一致。
         """
-        try:
-            st = self.config_file.stat()
-        except OSError:
-            st = None
-        if st is not None:
-            key = (str(self.config_file), st.st_mtime_ns, st.st_size)
-            if key == self._cache_key:
-                return self
-        if self.config_file.exists():
+        with self._load_lock:
             try:
-                data = json.loads(self.config_file.read_text(encoding="utf-8"))
-                self.url = data.get("url", "")
-                self.key = data.get("key", "")
-                self._load_web_auth(data)
-            except Exception as e:
-                print(f"[警告] 读取配置文件 {self.config_file} 失败: {e}", file=sys.stderr)
-                return self
-            self._cache_key = key if st is not None else None
+                st = self.config_file.stat()
+            except OSError:
+                st = None
+            if st is not None:
+                key = (str(self.config_file), st.st_mtime_ns, st.st_size)
+                if key == self._cache_key:
+                    return self
+            if self.config_file.exists():
+                try:
+                    data = json.loads(self.config_file.read_text(encoding="utf-8"))
+                    self.url = data.get("url", "")
+                    self.key = data.get("key", "")
+                    self._load_web_auth(data)
+                except Exception as e:
+                    print(f"[警告] 读取配置文件 {self.config_file} 失败: {e}", file=sys.stderr)
+                    return self
+                self._cache_key = key if st is not None else None
         return self
 
     def _load_web_auth(self, data: dict):
@@ -3347,7 +3349,7 @@ def _write_web_log(line: str) -> None:
 # - 每次 search 按返回条数本地累计（_note_quota_used），回缓存时从中转站
 #   「剩余查询」里扣掉；官方的月配额和 F 点保留账户接口的值；
 # - 缓存过期（成功 10 分钟 / 失败退避 1 分钟）且闲时（无导出/批量任务）
-#   才在后台刷新真实值，响应带 pending_refresh，前端稍后再取一次。
+#   才在后台刷新真实值，响应带 pending_refresh，前端每 2 秒补取，刷新完成后停止。
 _ACCOUNT_INFO_TTL = 600.0
 _ACCOUNT_INFO_FAIL_TTL = 60.0
 _account_info_lock = threading.Lock()
@@ -3358,6 +3360,8 @@ _account_info_state: dict = {
     "error": "",
     "quota_mark": 0,    # 拉取该缓存时 _local_quota_used 的值
     "client": None,     # 拉取时的 (base_url, key)，换账号即失效
+    "request_id": 0,    # 只允许最后启动的拉取写入缓存
+    "request_client": None,
 }
 _account_info_inflight = False
 _local_quota_used = 0  # 进程内计数；缓存存在时只累计该账号的返回条数
@@ -3378,7 +3382,8 @@ def _reset_account_info_state() -> None:
     global _account_info_inflight, _local_quota_used
     with _account_info_lock:
         _account_info_state.update(
-            data=None, fetched_at=0.0, ok=False, error="", quota_mark=0, client=None
+            data=None, fetched_at=0.0, ok=False, error="", quota_mark=0, client=None,
+            request_id=_account_info_state["request_id"] + 1, request_client=None,
         )
         _local_quota_used = 0
         _account_info_inflight = False
@@ -3394,31 +3399,38 @@ def _web_idle_for_account_refresh() -> bool:
         return not _has_running_export_task()
 
 
-def _fetch_account_info(client: FofaClient) -> dict:
+def _fetch_account_info(client: FofaClient, request_id: Optional[int] = None) -> dict:
     """真实调用一次账户接口并写入缓存，返回可直接下发的载荷。"""
     now = time.time()
     signature = _account_client_signature(client)
+    if request_id is None:
+        with _account_info_lock:
+            _account_info_state["request_id"] += 1
+            request_id = _account_info_state["request_id"]
+            _account_info_state["request_client"] = signature
     try:
         info = client.get_usage()
     except FofaAPIError as e:
         with _account_info_lock:
-            if _account_info_state["client"] != signature:
-                _account_info_state["data"] = None
-            _account_info_state.update(
-                fetched_at=now, ok=False, error=str(e), client=signature
-            )
+            if _account_info_state["request_id"] == request_id:
+                if _account_info_state["client"] != signature:
+                    _account_info_state["data"] = None
+                _account_info_state.update(
+                    fetched_at=now, ok=False, error=str(e), client=signature
+                )
         return {"server_ok": False, "error": str(e)}
     payload = dict(info)
     payload["server_ok"] = True
     with _account_info_lock:
-        _account_info_state.update(
-            data=payload,
-            fetched_at=now,
-            ok=True,
-            error="",
-            quota_mark=_local_quota_used,
-            client=signature,
-        )
+        if _account_info_state["request_id"] == request_id:
+            _account_info_state.update(
+                data=payload,
+                fetched_at=now,
+                ok=True,
+                error="",
+                quota_mark=_local_quota_used,
+                client=signature,
+            )
     return payload
 
 
@@ -3426,14 +3438,20 @@ def _start_account_info_refresh(client: FofaClient) -> bool:
     """后台刷新账户信息；已有刷新在跑时返回 False。"""
     global _account_info_inflight
     with _account_info_lock:
-        if _account_info_inflight:
+        if (
+            _account_info_inflight
+            or _account_info_state["request_client"] != _account_client_signature(client)
+        ):
             return False
         _account_info_inflight = True
+        # 在线程启动前占用编号，避免旧账号的线程晚启动后变成最新请求。
+        _account_info_state["request_id"] += 1
+        request_id = _account_info_state["request_id"]
 
     def worker():
         global _account_info_inflight
         try:
-            _fetch_account_info(client)
+            _fetch_account_info(client, request_id)
         finally:
             with _account_info_lock:
                 _account_info_inflight = False
