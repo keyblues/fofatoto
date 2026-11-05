@@ -11,7 +11,7 @@ Guidance for agents working in this repository.
 ## Commands
 
 ```bash
-# Syntax check + unit tests (stdlib unittest, 256 tests, no network calls)
+# Syntax check + unit tests (stdlib unittest, 277 tests, no network calls)
 python -m py_compile fofatoto.py
 python -m unittest test_fofatoto -v
 
@@ -43,6 +43,7 @@ Everything lives in `fofatoto.py` (~4501 lines) plus `test_fofatoto.py`. No pack
 |-----------|-------|-------|
 | `APP_VERSION`, `DEFAULT_CONFIG`, `DEFAULT_FIELDS` | 42–68 | Module-level constants; `DEFAULT_CONFIG` ships the `web_auth` block (`enabled`/`secret`, default off) so fresh `config.json` files and the Web UI config-guidance template carry it |
 | `WEB_FIELD_CATEGORIES`, `WEB_HTML_TEMPLATE` | 109–540 | **The entire Web UI is an inline HTML/CSS/JS string** with `__APP_VERSION__`, `__GITHUB_URL__`, `__FIELD_CATEGORIES_JSON__`, `__DEFAULT_FIELDS_JSON__` placeholders substituted by `render_web_html()` (543); field-selector categories live in `WEB_FIELD_CATEGORIES` and are injected into the template |
+| Browser preview cache | Inline JS: `openPreviewCache` through `initPreviewCache`, `doInstantSearch`; backend `_preview_cache_scope`, `GET /api/config` | IndexedDB `fofatoto_preview_cache` / `queries`; TTL 24h, 50 entries, 50 MiB total, 5 MiB per entry (UTF-8 JSON Blob + key bytes, excludes browser overhead). Key = exact trimmed query + field order + size + full + hashed `(base_url, key)` account scope. Startup / 60s expiry cleanup and expiry/LRU eviction before writes; metadata-only compound-index cursor avoids reading all result Blobs. Cache hit avoids `/api/search`; `/api/config` is local-only and auth-gated. Clear/toggle increments a generation so older in-flight responses cannot refill a cleared cache. Deep/batch exports never enter this store, and file downloads send `Cache-Control: no-store` |
 | `ConfigManager` | 561–687 | `_app_config_dir()` (561) resolves the config dir (shared with `_update_cache_file`); `get_client()` (676) supports **hot-reload** — re-reads `config.json` via `load()` on each call and returns a new `FofaClient`; no restart needed. `load()` serializes concurrent reloads so config fields and the cache key cannot be published by different readers, and short-circuits on a `(path, mtime_ns, size)` cache key — Web requests call it constantly (auth gate, `get_client`, `public_status`, 1s progress polls), and only re-read when the file actually changed; parse failures never cache, so they retry next call. `_load_web_auth` parses the optional `web_auth` object (missing / non-dict → disabled); `public_status()` also reports `web_auth_enabled` (never the secret) and `official` (only `fofa.info` / `en.fofa.info` may show the account profile) |
 | Update check | 689–1055 | `fetch_latest_release` (830) hits GitHub Releases; `announce_update` (1022) for CLI/Web startup; `snapshot_update` (1039) backs `GET /api/update`. Success cached 12h, failure 1h, in `.fofatoto_update.json` next to the executable (path via `_app_config_dir()`). `--no-update-check` / `FOFATOTO_NO_UPDATE_CHECK=1` disables it |
 | `FofaResult` dataclass | 1057–1101 | 28 FOFA fields; `_extra` dict captures unknown API fields |
@@ -70,7 +71,11 @@ The Web UI HTML/CSS/JS is a single raw string literal (`WEB_HTML_TEMPLATE`, line
 - **No external assets** — all CSS and JS inline, zero dependencies, Chinese UI.
 - **Placeholders** `__APP_VERSION__` / `__GITHUB_URL__` / `__FIELD_CATEGORIES_JSON__` / `__DEFAULT_FIELDS_JSON__` are replaced by `render_web_html()` — don't use double-underscore IDs elsewhere in the template (collision risk). The update-badge script intentionally contains `__GITHUB_URL__/releases/` so the link prefix stays tied to `GITHUB_URL`. The separate `WEB_LOGIN_HTML` login page deliberately uses **no placeholders** it is served verbatim.
 - **All `onclick` handlers use `&quot;`** for quotes inside the Python string, not escaped single quotes.
-- Frontend state lives in JS module-level vars (`currentMode`, `currentResults`, `currentTotal`, `excludedFilters`, `exportPollTimer`, etc.) — there is no framework. `currentTotal` is the FOFA total from the search payload; sort and exclude re-render with it instead of `currentResults.length`.
+- Frontend state lives in JS module-level vars (`currentMode`, `currentResults`, `currentTotal`, `instantSearchRequestId`, `excludedFilters`, `exportPollTimer`, etc.) — there is no framework. `currentTotal` is the FOFA total from the search payload; sort and exclude re-render with it instead of `currentResults.length`. Instant-search responses and errors update the result area only when their request ID is current. Successful searches (including superseded responses) and terminal export/batch polls refresh the cached account display.
+- Browser query cache stores only successful instant-preview payloads (including zero rows). Settings allow disabling/clearing it; clear preserves the current table, query history, and cumulative hit statistics. `重新查询` appears only after a cache hit, immediately after `缓存已命中，命中率 xx%`; it removes the matching entry and bypasses lookup, then hides. Hits / ordinary cache lookups are persisted in localStorage `fofa_preview_cache_stats`, displayed in settings, and rounded to one decimal at most. Forced refreshes, disabled-cache queries, and superseded lookups do not affect the statistics. The scope in a successful `/api/search` payload belongs to its actual query client, so a config change after `/api/config` does not save results under the wrong account. Oversized entries or unavailable storage leave query results visible. IndexedDB is scoped to the browser origin; a different Web port has a separate cache.
+- **Keep the pending-query box in its original position below the results area.** `queryLoading` shows the blue `查询中...` box only during instant queries and hides when they finish. `showMessage` routes `info` to this box and errors to plain-text `queryFeedback` next to the query input; `clearMessage` hides both. Do not put cache-clear or other success notifications in the bottom query box. Cache clear is silent and only updates the settings summary; it preserves cumulative hits and lookup counts.
+
+Account quota units remain distinct: `_local_quota_used` counts returned rows for relay total-balance estimates, while `_local_query_count` counts successful `search()` calls for relay `today_remaining` (including probes and zero-row successes; a successful retry counts once). Both marks reset on a successful account fetch, and both counters ignore queries from a different cached account. `SearchStats.total_quota_used` reports returned rows for single searches; deep searches include probe quota. Web batch progress adds the completed targets' quota to the current target, and final quota sums all completed targets.
 
 ## Config and secrets
 
@@ -86,7 +91,7 @@ The Web UI HTML/CSS/JS is a single raw string literal (`WEB_HTML_TEMPLATE`, line
 - `pyproject.toml` `version` field
 - `uv.lock` package version
 
-Currently all three are synced at `1.9.0` (last release: v1.9.0, 2026-10-16).
+Currently all three are synced at `1.10.0` for release preparation (`CHANGELOG.md`: v1.10.0, 2026-11-05). The latest published release remains v1.9.0 (2026-10-16) until v1.10.0 is tagged.
 
 ## Branch and changelog rules
 
