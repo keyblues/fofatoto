@@ -39,7 +39,7 @@ from urllib.parse import parse_qs, quote, unquote_to_bytes, urljoin, urlparse
 
 # ============ Banner ============
 
-APP_VERSION = "1.9.0"
+APP_VERSION = "1.10.0"
 GITHUB_URL = "https://github.com/keyblues/fofatoto"
 DEFAULT_CONFIG = {
     "url": "https://fofa.info",
@@ -234,6 +234,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Micr
 .settings-popup{display:none;position:absolute;top:100%;left:0;margin-top:4px;background:var(--card-bg);border:1px solid var(--border);border-radius:2px;padding:10px 12px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.08);min-width:180px;max-width:calc(100vw - 48px)}
 .settings-popup.show{display:block}
 .settings-popup label{display:flex;align-items:center;gap:6px;padding:4px 0;font-size:12px;cursor:pointer;white-space:nowrap}
+.cache-settings{border-top:1px solid var(--border);margin-top:6px;padding-top:6px;min-width:200px}
+.cache-summary,.cache-hint,.cache-note{font-size:11px;color:var(--text-secondary);line-height:1.6}
+.cache-hint{margin:4px 0 6px;white-space:normal}
+.cache-status{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.cache-note:empty{display:none}
 .exc-chips{display:inline-flex;gap:4px;flex-wrap:wrap;align-items:center}
 .exc-chip{display:inline-flex;align-items:center;gap:3px;padding:2px 6px;font-size:11px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;border-radius:2px;white-space:nowrap}
 .exc-chip .exc-x{cursor:pointer;font-weight:700;color:#dc2626;opacity:.7}
@@ -278,9 +283,9 @@ td.mono{font-family:"SF Mono","Fira Code",Consolas,Monaco,monospace;font-size:11
 .export-meta-value{display:block;font-size:13px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .export-panel-msg{font-size:12px;color:var(--text-secondary);line-height:1.6}
 .export-panel-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
-.message{padding:10px 14px;border-radius:2px;font-size:12px;margin-bottom:12px}
-.message.error{background:#fef2f2;border:1px solid #fecaca;color:var(--danger)}
-.message.info{background:#eff6ff;border:1px solid #bfdbfe;color:var(--primary-light)}
+.query-feedback{font-size:12px;line-height:1.6;margin:0 0 12px;color:var(--text-secondary);overflow-wrap:anywhere}
+.query-feedback.error{color:var(--danger)}
+.query-loading{padding:10px 14px;border-radius:2px;font-size:12px;margin-bottom:12px;background:#eff6ff;border:1px solid #bfdbfe;color:var(--primary-light)}
 .config-alert{display:none;background:#fff7ed;border:1px solid #fed7aa;border-left:3px solid var(--warning);border-radius:2px;padding:12px 14px;margin-bottom:16px;font-size:12px;color:#7c2d12}
 .config-alert.show{display:block}
 .config-alert strong{display:block;color:#9a3412;font-size:13px;margin-bottom:6px}
@@ -358,6 +363,7 @@ td{max-width:240px}
 </div>
 <button class="btn btn-primary" id="searchBtn" onclick="executeSearch()">搜索</button>
 </div>
+<div class="query-feedback" id="queryFeedback" role="status" aria-live="polite" hidden></div>
 <div class="field-row">
 <label>字段</label>
 <div class="field-control" id="fieldControl"></div>
@@ -370,7 +376,8 @@ td{max-width:240px}
 <label>数量:<select id="instantSize"><option value="10">10</option><option value="20">20</option><option value="50">50</option><option value="100" selected>100</option><option value="200">200</option><option value="500">500</option><option value="1000">1000</option><option value="2000">2000</option><option value="5000">5000</option><option value="10000">10000</option></select></label>
 <span class="exc-chips" id="exclusionChips"></span>
 <button class="mini-btn" onclick="openIconModal()">Icon 提取</button>
-<div class="settings-wrap"><button class="mini-btn" onclick="toggleSettings(event)">设置</button><div class="settings-popup" id="settingsPopup"><label><input type="checkbox" id="fitToWindow" checked onchange="toggleFitToWindow(this)"> 适应窗口宽度</label><label><input type="checkbox" id="instantFull"> 全部数据</label><label><input type="checkbox" id="instantAutoQuery"> 选取查询后自动搜索</label><label><input type="checkbox" id="showHistory" checked onchange="toggleShowHistory(this)"> 显示历史记录</label><button type="button" class="mini-btn" id="logoutBtn" style="display:none;margin-top:6px" onclick="logoutWebAuth()">退出登录</button></div></div>
+<div class="settings-wrap"><button class="mini-btn" onclick="toggleSettings(event)">设置</button><div class="settings-popup" id="settingsPopup"><label><input type="checkbox" id="fitToWindow" checked onchange="toggleFitToWindow(this)"> 适应窗口宽度</label><label><input type="checkbox" id="instantFull"> 全部数据</label><label><input type="checkbox" id="instantAutoQuery"> 选取查询后自动搜索</label><label><input type="checkbox" id="showHistory" checked onchange="toggleShowHistory(this)"> 显示历史记录</label><div class="cache-settings"><label><input type="checkbox" id="previewCacheEnabled" checked onchange="togglePreviewCache(this)"> 缓存预览结果</label><div class="cache-summary" id="previewCacheSummary">正在读取缓存...</div><div class="cache-summary" id="previewCacheStats">缓存命中 0 次，命中率 0%</div><div class="cache-hint">24 小时过期；单条最多 5 MiB，总计最多 50 MiB。深度、批量导出不缓存。</div><button type="button" class="mini-btn" onclick="clearPreviewCache()">清空查询缓存</button></div><button type="button" class="mini-btn" id="logoutBtn" style="display:none;margin-top:6px" onclick="logoutWebAuth()">退出登录</button></div></div>
+<span class="cache-status"><span class="cache-note" id="previewCacheSource"></span><button class="mini-btn" id="refreshPreviewBtn" style="display:none" onclick="executeSearch(true)" title="跳过缓存，重新向 FOFA 查询，会使用查询额度">重新查询</button></span>
 </div>
 <div class="options-row" id="exportOptions" style="display:none">
 <label>覆盖率:<input type="number" id="exportFill" value="0.8" min="0.1" max="1.0" step="0.1"></label>
@@ -404,7 +411,7 @@ td{max-width:240px}
 <div class="table-container" style="border:none"><div class="empty-state" id="emptyState" style="display:none"></div><table id="resultsTable"><thead></thead><tbody></tbody></table></div>
 </div>
 </div>
-<div id="messageArea"></div>
+<div class="query-loading" id="queryLoading" role="status" aria-live="polite" hidden></div>
 </div>
 <div class="overlay" id="cancelOverlay">
 <div class="overlay-content" style="text-align:center">
@@ -432,7 +439,106 @@ td{max-width:240px}
 var fieldCategories=__FIELD_CATEGORIES_JSON__;
 var selectedFields=__DEFAULT_FIELDS_JSON__;
 var currentMode="instant",currentResults=[],currentTotal=0,currentColumns=[],currentView=[],rowHeight=0,OVERSCAN=10,previewRendered=false,exportTaskId=null,exportPollTimer=null,sortColumn=null,sortAsc=true,historyActiveIndex=-1,historyVisibleItems=[],vsLastWindow=null;
+var instantSearchRequestId=0;
 var ACCOUNT_REFRESH_INTERVAL=180000,accountRefreshTimer=null,lastAccountRefresh=0,accountInfoRepoll=null;
+var PREVIEW_CACHE_TTL=24*60*60*1000,PREVIEW_CACHE_MAX_BYTES=50*1024*1024,PREVIEW_CACHE_ENTRY_BYTES=5*1024*1024,PREVIEW_CACHE_MAX_ENTRIES=50;
+var previewCacheDbPromise=null,previewCacheEnabled=true,previewCacheGeneration=0;
+var previewCacheStats={hits:0,lookups:0};
+function loadPreviewCacheStats(){try{var stats=JSON.parse(localStorage.getItem("fofa_preview_cache_stats")||"null");if(stats)previewCacheStats={hits:Number(stats.hits)||0,lookups:Number(stats.lookups)||0}}catch(e){}}
+function savePreviewCacheStats(){try{localStorage.setItem("fofa_preview_cache_stats",JSON.stringify(previewCacheStats))}catch(e){}}
+function previewCacheHitRate(){return (previewCacheStats.lookups?Math.round(previewCacheStats.hits*1000/previewCacheStats.lookups)/10:0)+"%"}
+function updatePreviewCacheStats(){var el=document.getElementById("previewCacheStats");if(el)el.textContent="缓存命中 "+previewCacheStats.hits+" 次，命中率 "+previewCacheHitRate()}
+function notePreviewCacheLookup(hit){loadPreviewCacheStats();previewCacheStats.lookups++;if(hit)previewCacheStats.hits++;savePreviewCacheStats();updatePreviewCacheStats()}
+function openPreviewCache(){
+  if(typeof indexedDB==="undefined")return Promise.resolve(null);
+  if(!previewCacheDbPromise)previewCacheDbPromise=new Promise(function(resolve){
+    var request;try{request=indexedDB.open("fofatoto_preview_cache",1)}catch(e){resolve(null);return}
+    request.onupgradeneeded=function(){var store=request.result.createObjectStore("queries",{keyPath:"key"});store.createIndex("by_lru",["last_used","bytes","expires_at"])};
+    request.onsuccess=function(){var db=request.result;db.onversionchange=function(){db.close();previewCacheDbPromise=null};resolve(db)};
+    request.onerror=function(){resolve(null)};
+  });
+  return previewCacheDbPromise;
+}
+function previewCacheTransaction(mode,action){
+  return openPreviewCache().then(function(db){
+    if(!db)return null;
+    return new Promise(function(resolve,reject){
+      var tx=db.transaction("queries",mode),result=null;
+      tx.oncomplete=function(){resolve(result)};
+      tx.onabort=tx.onerror=function(){reject(tx.error)};
+      action(tx.objectStore("queries"),function(value){result=value});
+    });
+  }).catch(function(){return null});
+}
+function previewCacheKey(scope,params){return scope?JSON.stringify([1,scope,params.query,params.fields,params.size,params.full]):""}
+function previewCachePlan(entries,now,incoming){
+  var remove=[],keep=[];
+  entries.forEach(function(entry){if(entry.expires_at<=now||(incoming&&entry.key===incoming.key))remove.push(entry.key);else keep.push(entry)});
+  if(incoming)keep.push({key:incoming.key,last_used:incoming.last_used,bytes:incoming.bytes,expires_at:incoming.expires_at});
+  keep.sort(function(a,b){return a.last_used-b.last_used});
+  var bytes=keep.reduce(function(sum,entry){return sum+entry.bytes},0);
+  while(keep.length>PREVIEW_CACHE_MAX_ENTRIES||bytes>PREVIEW_CACHE_MAX_BYTES){var old=keep.shift();bytes-=old.bytes;remove.push(old.key)}
+  return {remove:remove,count:keep.length,bytes:bytes,stored:!!incoming&&keep.some(function(entry){return entry.key===incoming.key})};
+}
+function prunePreviewCacheStore(store,incoming,finish){
+  var entries=[],cursor=store.index("by_lru").openKeyCursor();
+  cursor.onsuccess=function(){
+    var item=cursor.result;
+    if(item){entries.push({key:item.primaryKey,last_used:item.key[0],bytes:item.key[1],expires_at:item.key[2]});item.continue();return}
+    var plan=previewCachePlan(entries,Date.now(),incoming);
+    plan.remove.forEach(function(key){store.delete(key)});
+    if(incoming&&plan.stored)store.put(incoming);
+    finish(plan);
+  };
+}
+function updatePreviewCacheSummary(stats){
+  var el=document.getElementById("previewCacheSummary");
+  if(el)el.textContent=stats?("缓存 "+stats.count+" 条 · 数据 "+(stats.bytes/1024/1024).toFixed(1)+" / 50 MiB"):"浏览器缓存不可用";
+}
+function cleanPreviewCache(){return previewCacheTransaction("readwrite",function(store,finish){prunePreviewCacheStore(store,null,finish)}).then(updatePreviewCacheSummary)}
+function readPreviewCache(key){
+  if(!previewCacheEnabled||!key)return Promise.resolve(null);
+  return previewCacheTransaction("readwrite",function(store,finish){
+    var request=store.get(key);
+    request.onsuccess=function(){
+      var entry=request.result;
+      if(!entry)return;
+      if(entry.expires_at<=Date.now()){store.delete(key);return}
+      entry.last_used=Date.now();store.put(entry);finish(entry);
+    };
+  }).then(function(entry){if(!entry)return null;return entry.body.text().then(function(text){return {data:JSON.parse(text),created_at:entry.created_at}})}).catch(function(){return null});
+}
+function deletePreviewCacheEntry(key){return previewCacheTransaction("readwrite",function(store,finish){store.delete(key);finish(true)})}
+function writePreviewCache(key,data,generation){
+  if(!previewCacheEnabled||!key||generation!==previewCacheGeneration)return Promise.resolve("disabled");
+  var body;try{body=new Blob([JSON.stringify(data)],{type:"application/json"})}catch(e){return Promise.resolve("unavailable")}
+  var bytes=body.size+new Blob([key]).size;
+  if(bytes>PREVIEW_CACHE_ENTRY_BYTES)return deletePreviewCacheEntry(key).then(function(){return "too_large"});
+  var now=Date.now(),entry={key:key,body:body,bytes:bytes,created_at:now,last_used:now,expires_at:now+PREVIEW_CACHE_TTL};
+  return previewCacheTransaction("readwrite",function(store,finish){
+    if(!previewCacheEnabled||generation!==previewCacheGeneration){finish({skipped:true});return}
+    prunePreviewCacheStore(store,entry,finish);
+  }).then(function(stats){
+    if(stats&&stats.skipped)return "disabled";
+    updatePreviewCacheSummary(stats);
+    return stats&&stats.stored?"stored":"unavailable";
+  });
+}
+function setPreviewCacheSource(text,cacheHit){var el=document.getElementById("previewCacheSource");if(el)el.textContent=text||"";var btn=document.getElementById("refreshPreviewBtn");if(btn)btn.style.display=cacheHit?"":"none"}
+function togglePreviewCache(el){previewCacheEnabled=el.checked;previewCacheGeneration++;if(!previewCacheEnabled)setPreviewCacheSource("");try{localStorage.setItem("fofa_preview_cache_enabled",previewCacheEnabled?"1":"0")}catch(e){}}
+function clearPreviewCache(){
+  previewCacheGeneration++;
+  return previewCacheTransaction("readwrite",function(store,finish){store.clear();finish({count:0,bytes:0})}).then(function(stats){
+    if(stats)setPreviewCacheSource("");
+    updatePreviewCacheSummary(stats);
+  });
+}
+function initPreviewCache(){
+  try{previewCacheEnabled=localStorage.getItem("fofa_preview_cache_enabled")!=="0"}catch(e){}
+  var el=document.getElementById("previewCacheEnabled");if(el)el.checked=previewCacheEnabled;
+  loadPreviewCacheStats();updatePreviewCacheStats();
+  cleanPreviewCache();setInterval(cleanPreviewCache,60000);
+}
 function initFieldSelector(){renderChips();renderFieldPanel();var ctrl=document.getElementById("fieldControl");var trig=document.createElement("div");trig.className="field-trigger";trig.id="fieldTrigger";trig.textContent="+";trig.addEventListener("click",function(e){e.stopPropagation();toggleFieldPanel()});ctrl.appendChild(trig);document.getElementById("fpSearch").addEventListener("input",filterFields);var fieldRowDown=false;document.addEventListener("mousedown",function(e){fieldRowDown=!!(e.target.closest&&e.target.closest(".field-row"))},true);document.addEventListener("click",function(){var p=document.getElementById("fieldPanel");if(p.classList.contains("open")&&!fieldRowDown)p.classList.remove("open")});document.addEventListener("keydown",function(e){if(e.key==="Escape")document.getElementById("fieldPanel").classList.remove("open")})}
 var dragField=null;
 function clearChipDropClasses(){document.querySelectorAll("#fieldControl .chip").forEach(function(el){el.classList.remove("drop-before","drop-after")})}
@@ -443,7 +549,7 @@ function toggleField(f){var i=selectedFields.indexOf(f);if(i>-1)selectedFields.s
 function removeField(f){var i=selectedFields.indexOf(f);if(i>-1){selectedFields.splice(i,1);renderChips();renderFieldPanel()}}
 function filterFields(){var q=document.getElementById("fpSearch").value.trim().toLowerCase();var total=0;document.querySelectorAll("#fpBody .fp-category").forEach(function(cat){var v=0;cat.querySelectorAll(".fp-field").forEach(function(b){var m=!q||b.dataset.field.indexOf(q)>-1;b.classList.toggle("hidden",!m);if(m){v++;total++}});cat.style.display=v>0?"":"none"});var old=document.getElementById("fpEmpty");if(total===0&&q){if(!old){var el=document.createElement("div");el.id="fpEmpty";el.className="fp-empty";el.textContent="无匹配字段";document.getElementById("fpBody").appendChild(el)}}else if(old)old.remove()}
 function getSelectedFields(){return selectedFields.join(",")}
-document.addEventListener("DOMContentLoaded",function(){checkUpdate();initFieldSelector();loadAccountInfo(false).finally(function(){lastAccountRefresh=Date.now()});setupModeTabs();setupSearchShortcut();setupQueryDropTarget();var sh=document.getElementById("showHistory");if(sh)sh.checked=getShowHistory();updateLayout();startAccountRefresh();document.addEventListener("visibilitychange",onVisibilityChange);window.addEventListener("resize",function(){autoResizeQueryInput();updateLayout();renderVirtual()})});
+document.addEventListener("DOMContentLoaded",function(){checkUpdate();initFieldSelector();initPreviewCache();loadAccountInfo(false).finally(function(){lastAccountRefresh=Date.now()});setupModeTabs();setupSearchShortcut();setupQueryDropTarget();var sh=document.getElementById("showHistory");if(sh)sh.checked=getShowHistory();updateLayout();startAccountRefresh();document.addEventListener("visibilitychange",onVisibilityChange);window.addEventListener("resize",function(){autoResizeQueryInput();updateLayout();renderVirtual()})});
 function setupModeTabs(){document.querySelectorAll(".mode-tab").forEach(function(t){t.addEventListener("click",function(){switchMode(this.dataset.mode)})})}
 function modeButtonText(){return currentMode==="instant"?"搜索":(currentMode==="export"?"导出":"批量查询")}
 function refreshModeButton(){var btn=document.getElementById("searchBtn");btn.textContent=modeButtonText();btn.className="btn btn-primary"}
@@ -463,12 +569,42 @@ function loadAccountInfo(silent){return fetch("/api/info").then(function(r){retu
 function startAccountRefresh(){if(accountRefreshTimer)return;accountRefreshTimer=setInterval(function(){loadAccountInfo(true);lastAccountRefresh=Date.now()},ACCOUNT_REFRESH_INTERVAL)}
 function stopAccountRefresh(){if(accountRefreshTimer){clearInterval(accountRefreshTimer);accountRefreshTimer=null}}
 function onVisibilityChange(){if(document.hidden){stopAccountRefresh()}else{var elapsed=Date.now()-lastAccountRefresh;if(elapsed>=ACCOUNT_REFRESH_INTERVAL){loadAccountInfo(true);lastAccountRefresh=Date.now()}startAccountRefresh()}}
-function executeSearch(){var q=document.getElementById("queryInput").value.trim();if(!q)return;closeHistorySuggestions();addToHistory(q);if(currentMode==="instant")doInstantSearch(q);else if(currentMode==="export")doDeepExport(q);else doBatchSearch(q)}
+function executeSearch(forceRefresh){var q=document.getElementById("queryInput").value.trim();if(!q)return;closeHistorySuggestions();addToHistory(q);if(currentMode==="instant")doInstantSearch(q,!!forceRefresh);else if(currentMode==="export")doDeepExport(q);else doBatchSearch(q)}
 function openIconModal(){var ov=document.getElementById("iconOverlay"),inp=document.getElementById("iconTargetInput");document.getElementById("iconModalError").style.display="none";inp.value="";inp.onkeydown=function(e){if(e.key==="Enter"){e.preventDefault();submitIconExtract()}else if(e.key==="Escape"){closeIconModal()}};ov.classList.add("show");setTimeout(function(){inp.focus()},50)}
 function closeIconModal(){document.getElementById("iconOverlay").classList.remove("show")}
 function iconModalError(msg){var el=document.getElementById("iconModalError");el.textContent=msg;el.style.display="block"}
 function submitIconExtract(){var inp=document.getElementById("iconTargetInput"),target=inp.value.trim();if(!target){iconModalError("请输入网站地址");return}var btn=document.getElementById("iconExtractBtn"),oldText=btn.textContent;btn.disabled=true;btn.textContent="提取中...";fetch("/api/icon",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target:target})}).then(function(r){return r.json()}).then(function(data){if(!data.success){iconModalError(formatApiError(data,"icon 提取失败"));return}var hash=(data.data||{}).icon_hash;if(!hash){iconModalError("服务器返回数据缺少 icon_hash，请重试");return}var q='icon_hash="'+hash+'"';var qin=document.getElementById("queryInput");qin.value=q;autoResizeQueryInput();closeIconModal();qin.focus()}).catch(function(e){iconModalError("网络错误: "+e.message)}).finally(function(){btn.disabled=false;btn.textContent=oldText})}
-function doInstantSearch(query){var size=parseInt(document.getElementById("instantSize").value)||100,fields=getSelectedFields(),full=document.getElementById("instantFull").checked;clearResults();showMessage("info","搜索中...");fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:query,size:size,fields:fields,full:full})}).then(function(r){return r.json()}).then(function(data){clearMessage();if(data.success){currentResults=data.data.results||[];currentColumns=data.data.columns||[];currentTotal=(data.data&&data.data.total)||0;var _sb=getScrollBox();if(_sb)_sb.scrollTop=0;renderResults(data.data)}else showMessage("error",formatApiError(data,"搜索失败"))}).catch(function(e){showMessage("error","网络错误: "+e.message)})}
+function applyInstantResults(data){clearMessage();currentResults=data.data.results||[];currentColumns=data.data.columns||[];currentTotal=(data.data&&data.data.total)||0;var box=getScrollBox();if(box)box.scrollTop=0;renderResults(data.data)}
+async function doInstantSearch(query,forceRefresh){
+  var requestId=++instantSearchRequestId,generation=previewCacheGeneration;
+  var params={query:query,size:parseInt(document.getElementById("instantSize").value)||100,fields:getSelectedFields(),full:document.getElementById("instantFull").checked};
+  clearResults();showMessage("info","查询中...");
+  try{
+    var scope="",key="";
+    if(previewCacheEnabled){
+      var config=await(await fetch("/api/config")).json();
+      if(!config.success)throw new Error(formatApiError(config,"无法读取配置"));
+      scope=(config.data||{}).cache_scope||"";key=previewCacheKey(scope,params);
+      if(key&&forceRefresh)await deletePreviewCacheEntry(key);
+      else if(key){
+        var cached=await readPreviewCache(key);
+        if(requestId!==instantSearchRequestId)return;
+        if(previewCacheEnabled&&generation===previewCacheGeneration){
+          notePreviewCacheLookup(!!cached);
+          if(cached){applyInstantResults({data:cached.data});setPreviewCacheSource("缓存已命中，命中率 "+previewCacheHitRate(),true);return}
+        }
+      }
+    }
+    if(requestId!==instantSearchRequestId)return;
+    var data=await(await fetch("/api/search",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(params)})).json();
+    if(data.success)loadAccountInfo(true);
+    if(requestId!==instantSearchRequestId)return;
+    if(!data.success){clearMessage();showMessage("error",formatApiError(data,"搜索失败"));return}
+    var saved=writePreviewCache(previewCacheKey(data.data.cache_scope||scope,params),data.data,generation);
+    applyInstantResults(data);setPreviewCacheSource("实时查询");
+    saved.then(function(status){if(requestId===instantSearchRequestId){setPreviewCacheSource(status==="stored"?"实时查询 · 已缓存":status==="too_large"?"实时查询 · 结果超过 5 MiB，未缓存":status==="unavailable"?"实时查询 · 浏览器缓存不可用":"实时查询")}});
+  }catch(e){if(requestId===instantSearchRequestId)showMessage("error","请求失败: "+e.message)}
+}
 function doDeepExport(query){var fill=parseFloat(document.getElementById("exportFill").value),maxSize=parseInt(document.getElementById("exportMaxSize").value)||0,fields=getSelectedFields(),full=document.getElementById("exportFull").checked;if(isNaN(fill))fill=0.8;if(fill<=0||fill>1){showMessage("error","覆盖率必须在 0 到 1 之间");return}if(maxSize<0){showMessage("error","上限不能小于 0");return}if(exportPollTimer){showMessage("error","已有导出任务正在运行，请先取消或等待完成");return}exportTaskId=null;clearMessage();showExportPanelStart(query,fill,maxSize,full);setSearchBusy(true,"导出中...");fetch("/api/export",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:query,fill_percent:fill,max_size:maxSize,fields:fields,full:full})}).then(function(r){return r.json()}).then(function(data){if(data.success){exportTaskId=data.task_id;pollProgress()}else{setSearchBusy(false);showExportPanelError(formatApiError(data,"导出失败"))}}).catch(function(e){setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})}
 function doBatchSearch(baseQuery){var ph=document.getElementById("batchPlaceholder").value||"{}",targets=document.getElementById("batchTargets").value.trim(),fill=parseFloat(document.getElementById("batchFill").value)||0.8,maxSize=parseInt(document.getElementById("batchMaxSize").value)||0,fields=getSelectedFields();if(!targets){showMessage("error","请输入批量目标");return}if(baseQuery.indexOf(ph)===-1){showMessage("error","基础查询必须包含占位符: "+ph);return}if(maxSize<0){showMessage("error","每目标上限不能小于 0");return}if(exportPollTimer){showMessage("error","已有任务正在运行，请先取消或等待完成");return}var targetLines=targets.replace(/\r/g,"").split("\n").map(function(l){return l.trim()}).filter(function(l){return l&&l.charAt(0)!=="#"});if(!targetLines.length){showMessage("error","请输入批量目标");return}exportTaskId=null;clearMessage();showBatchPanelStart(baseQuery,targetLines.length,ph,fill,maxSize);setSearchBusy(true,"批量查询中...");fetch("/api/batch",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({base_query:baseQuery,targets:targetLines,placeholder:ph,fill_percent:fill,max_size:maxSize,fields:fields})}).then(function(r){return r.json()}).then(function(data){if(data.success){exportTaskId=data.task_id;pollProgress()}else{setSearchBusy(false);showExportPanelError(formatApiError(data,"批量导出失败"))}}).catch(function(e){setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})}
 function exportMetaItem(label,value){return '<div class="export-meta-item"><span class="export-meta-label">'+escHtml(label)+'</span><span class="export-meta-value">'+escHtml(value)+'</span></div>'}
@@ -479,7 +615,7 @@ function showExportPanelError(message){document.getElementById("exportPanel").cl
 function updateExportPanel(d,pct){var target=exportTarget(d),fetched=d.fetched||0,elapsed=d.elapsed_seconds?d.elapsed_seconds+" 秒":"刚开始";document.getElementById("exportPanel").classList.add("show");document.getElementById("exportPanelFill").style.width=pct+"%";document.getElementById("exportPanelState").textContent=d.status==="done"?(d.partial?"部分完成":"完成"):(d.status==="error"?"失败":pct+"%");document.getElementById("exportPanelMessage").textContent=d.status==="done"?(d.partial?("部分导出完成，已保留 "+fetched.toLocaleString()+" 条可用结果。"):"导出文件已生成，可选择格式下载。"):(d.message||(d.kind==="batch"?"正在批量查询...":"正在按时间游标分批拉取 FOFA 数据..."));document.getElementById("exportPanelMeta").innerHTML=d.kind==="batch"?exportMetaItem("目标",(d.current_target||0)+" / "+(d.total_targets||0))+exportMetaItem("当前",(d.current_fetched||0).toLocaleString()+" / ~"+(d.current_target_count||d.current_total_estimated||0).toLocaleString())+exportMetaItem("累计",(d.fetched||0).toLocaleString())+exportMetaItem("失败",(d.failed_count||0).toLocaleString())+exportMetaItem("耗时",elapsed):exportMetaItem("已获取",fetched.toLocaleString())+exportMetaItem("目标",target?("~"+target.toLocaleString()):"估算中")+exportMetaItem("总匹配",((d.total_estimated||0).toLocaleString()))+exportMetaItem("独立 IP",((d.unique_ips||0).toLocaleString()))+exportMetaItem("配额",((d.total_quota_used||0).toLocaleString()))+exportMetaItem("耗时",elapsed);if(d.status==="done"){document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-primary" onclick="downloadExport(\'csv\')">下载 CSV</button><button class="btn btn-secondary" onclick="downloadExport(\'json\')">下载 JSON</button><button class="btn btn-secondary" onclick="downloadExport(\'txt\')">下载 TXT</button><button class="btn btn-secondary" onclick="hideExportPanel()">收起</button>'}else if(d.status==="error"){document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-secondary" onclick="hideExportPanel()">关闭</button>';document.getElementById("exportPanelMessage").innerHTML='<span style="color:#dc2626">'+escHtml(d.error||"未知错误")+"</span>"}else{document.getElementById("exportPanelActions").innerHTML='<button class="btn btn-secondary" onclick="cancelExport()">取消</button>'}updateLayout()}
 function hideExportPanel(){document.getElementById("exportPanel").classList.remove("show");updateLayout()}
 function setSearchBusy(busy,label){var btn=document.getElementById("searchBtn");btn.disabled=!!busy;if(busy)btn.textContent=label||"处理中...";else refreshModeButton()}
-function pollProgress(){if(!exportTaskId)return;if(exportPollTimer)clearInterval(exportPollTimer);exportPollTimer=setInterval(function(){fetch("/api/progress?task_id="+exportTaskId).then(function(r){return r.json()}).then(function(data){if(!data.success){clearInterval(exportPollTimer);exportPollTimer=null;setSearchBusy(false);showExportPanelError(formatApiError(data,"任务状态不可用"));return}var d=data.data,pct=(Math.max(0,Math.min(d.progress||0,1))*100).toFixed(1);updateExportPanel(d,pct);if(d.status==="done"||d.status==="error"){clearInterval(exportPollTimer);exportPollTimer=null;setSearchBusy(false)}}).catch(function(e){clearInterval(exportPollTimer);exportPollTimer=null;setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})},800)}
+function pollProgress(){if(!exportTaskId)return;if(exportPollTimer)clearInterval(exportPollTimer);exportPollTimer=setInterval(function(){fetch("/api/progress?task_id="+exportTaskId).then(function(r){return r.json()}).then(function(data){if(!data.success){clearInterval(exportPollTimer);exportPollTimer=null;setSearchBusy(false);showExportPanelError(formatApiError(data,"任务状态不可用"));return}var d=data.data,pct=(Math.max(0,Math.min(d.progress||0,1))*100).toFixed(1);updateExportPanel(d,pct);if(d.status==="done"||d.status==="error"){clearInterval(exportPollTimer);exportPollTimer=null;setSearchBusy(false);loadAccountInfo(true)}}).catch(function(e){clearInterval(exportPollTimer);exportPollTimer=null;setSearchBusy(false);showExportPanelError("网络错误: "+e.message)})},800)}
 function cancelExport(){if(exportTaskId)document.getElementById("cancelOverlay").classList.add("show")}
 function confirmCancel(save){if(!exportTaskId)return;document.getElementById("cancelOverlay").classList.remove("show");var discard=save?"0":"1";document.getElementById("exportPanelState").textContent="取消中";document.getElementById("exportPanelActions").innerHTML="";document.getElementById("exportPanelMessage").textContent="取消请求已发送，正在等待当前请求结束...";fetch("/api/progress/cancel?task_id="+exportTaskId+"&discard="+discard,{method:"POST"})}
 function hideCancelConfirm(){document.getElementById("cancelOverlay").classList.remove("show")}
@@ -513,16 +649,16 @@ function addExclusion(field,value){for(var i=0;i<excludedFilters.length;i++){if(
 function removeExclusion(index){if(index<0||index>=excludedFilters.length)return;excludedFilters.splice(index,1);renderCurrentView()}
 function renderExclusionChips(){var c=document.getElementById("exclusionChips");if(!c)return;var h="";excludedFilters.forEach(function(f,i){h+='<span class="exc-chip">不看 '+escHtml(f.field)+'="'+escHtml(f.value)+'"<span class="exc-x" onclick="removeExclusion('+i+')">&times;</span></span>'});c.innerHTML=h}
 function renderCurrentView(){var view=currentResults,ips={};if(excludedFilters.length){view=currentResults.filter(function(r){return !excludedFilters.some(function(f){return String(r[f.field]||"")===String(f.value)})})}view.forEach(function(r){if(r.ip)ips[r.ip]=1});renderResults({results:view,columns:currentColumns,total:currentTotal,unique_ips:Object.keys(ips).length});renderExclusionChips();if(excludedFilters.length)showPreviewStatus("已排除 "+excludedFilters.length+" 项，显示 "+view.length+"/"+currentResults.length)}
-function toggleSettings(e){if(e)e.stopPropagation();var p=document.getElementById("settingsPopup");p.classList.toggle("show")}
+function toggleSettings(e){if(e)e.stopPropagation();var p=document.getElementById("settingsPopup");p.classList.toggle("show");if(p.classList.contains("show")){loadPreviewCacheStats();updatePreviewCacheStats();cleanPreviewCache()}}
 function toggleLogoutItem(show){var b=document.getElementById("logoutBtn");if(b)b.style.display=show?"block":"none"}
 function logoutWebAuth(){fetch("/api/auth/logout",{method:"POST"}).then(function(r){return r.json()}).then(function(){location.href="/"}).catch(function(){location.href="/"})}
-function clearResults(){exitPickMode();excludedFilters=[];currentView=[];rowHeight=0;vsLastWindow=null;renderExclusionChips();previewRendered=false;document.getElementById("resultsArea").style.display="none";document.getElementById("resultsTable").style.display="table";document.getElementById("emptyState").style.display="none";document.querySelector("#resultsTable thead").innerHTML="";document.querySelector("#resultsTable tbody").innerHTML="";currentResults=[];currentColumns=[];currentTotal=0;sortColumn=null;updateLayout()}
+function clearResults(){exitPickMode();excludedFilters=[];currentView=[];rowHeight=0;vsLastWindow=null;renderExclusionChips();previewRendered=false;document.getElementById("resultsArea").style.display="none";document.getElementById("resultsTable").style.display="table";document.getElementById("emptyState").style.display="none";document.querySelector("#resultsTable thead").innerHTML="";document.querySelector("#resultsTable tbody").innerHTML="";currentResults=[];currentColumns=[];currentTotal=0;sortColumn=null;setPreviewCacheSource("");updateLayout()}
 function updateShellHeight(){var header=document.querySelector(".header");if(header)document.documentElement.style.setProperty("--header-height",Math.ceil(header.getBoundingClientRect().height)+"px")}
 function updateLayout(){syncModeContent();updateShellHeight();fitHistoryDropdown();fitResultsHeight()}
 function shellBottom(){var shell=document.querySelector(".container");return shell?shell.getBoundingClientRect().bottom:window.innerHeight}
-function fitResultsHeight(){var area=document.getElementById("resultsArea"),box=document.querySelector("#resultsArea .table-container");if(!area||!box||area.style.display==="none")return;var rect=box.getBoundingClientRect(),pad=window.innerWidth<=760?12:24,minH=window.innerHeight<560?120:180,msgEl=document.getElementById("messageArea"),msgH=msgEl&&msgEl.offsetHeight?msgEl.offsetHeight+12:0,available=shellBottom()-rect.top-pad-2-msgH;box.style.maxHeight=Math.max(minH,available)+"px"}
-function showMessage(type,text){document.getElementById("messageArea").innerHTML='<div class="message '+type+'">'+escHtml(text)+"</div>";updateLayout()}
-function clearMessage(){document.getElementById("messageArea").innerHTML="";updateLayout()}
+function fitResultsHeight(){var area=document.getElementById("resultsArea"),box=document.querySelector("#resultsArea .table-container");if(!area||!box||area.style.display==="none")return;var rect=box.getBoundingClientRect(),pad=window.innerWidth<=760?12:24,minH=window.innerHeight<560?120:180,loading=document.getElementById("queryLoading"),loadingH=loading&&!loading.hidden?loading.offsetHeight+12:0,available=shellBottom()-rect.top-pad-2-loadingH;box.style.maxHeight=Math.max(minH,available)+"px"}
+function showMessage(type,text){var el=document.getElementById(type==="info"?"queryLoading":"queryFeedback"),other=document.getElementById(type==="info"?"queryFeedback":"queryLoading");other.textContent="";other.hidden=true;el.textContent=text;el.classList.toggle("error",type==="error");el.hidden=false;updateLayout()}
+function clearMessage(){["queryLoading","queryFeedback"].forEach(function(id){var el=document.getElementById(id);el.textContent="";el.hidden=true});updateLayout()}
 function getHistory(){try{return JSON.parse(localStorage.getItem("fofa_query_history")||"[]")}catch(e){return[]}}
 function saveHistory(history){localStorage.setItem("fofa_query_history",JSON.stringify(history))}
 function getShowHistory(){try{return localStorage.getItem("fofa_show_history")!=="0"}catch(e){return true}}
@@ -589,6 +725,12 @@ def _is_official_fofa_url(url: str) -> bool:
         return urlparse(url).hostname in {"fofa.info", "en.fofa.info"}
     except ValueError:
         return False
+
+
+def _preview_cache_scope(url: str, key: str) -> str:
+    """浏览器缓存的账号标识；不向前端暴露 API Key。"""
+    identity = json.dumps([url.rstrip("/"), key], ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(identity).hexdigest()
 
 
 class ConfigManager:
@@ -688,6 +830,7 @@ class ConfigManager:
                 DEFAULT_CONFIG, ensure_ascii=False, indent=4
             ),
             "web_auth_enabled": self.web_auth_enabled,
+            "cache_scope": _preview_cache_scope(self.url, self.key) if self.is_valid() else "",
         }
 
     def get_client(self) -> Optional[FofaClient]:
@@ -2040,10 +2183,15 @@ class FofaClient:
             if result.ip:
                 unique_ips.add(result.ip)
 
-        # 按返回条数本地计次，供 /api/info 估算中转站的剩余额度
+        # 累计返回条数与成功查询次数，供 /api/info 估算中转站额度
         _note_quota_used(len(results), self)
         total = data.get("size", 0)
-        return SearchStats(total=total, unique_ips=len(unique_ips), results=results)
+        return SearchStats(
+            total=total,
+            unique_ips=len(unique_ips),
+            results=results,
+            total_quota_used=len(results),
+        )
 
     def search_all_efficient(
         self,
@@ -3120,7 +3268,8 @@ def _create_web_progress_callback(task_id: str):
 
 
 def _create_web_batch_progress_callback(
-    task_id: str, batch_idx: int, total_queries: int, base_count: int
+    task_id: str, batch_idx: int, total_queries: int, base_count: int,
+    base_quota_used: int,
 ):
     def progress_callback(state: dict):
         with _export_lock:
@@ -3142,7 +3291,7 @@ def _create_web_batch_progress_callback(
                 task.current_target_count = state.get(
                     "target_count", task.current_target_count
                 )
-                task.total_quota_used = state.get("total_quota_used", 0)
+                task.total_quota_used = base_quota_used + state.get("total_quota_used", 0)
             elif event == EVENT_RETRY:
                 attempt = state.get("attempt", 0)
                 max_attempts = state.get("max_attempts", 0)
@@ -3153,6 +3302,7 @@ def _create_web_batch_progress_callback(
                 )
             elif event == EVENT_DONE:
                 task.current_fetched = state.get("fetched", task.current_fetched)
+                task.total_quota_used = base_quota_used + state.get("total_quota_used", 0)
 
             current_target = task.current_target_count or task.current_total_estimated
             current_ratio = min(task.current_fetched / max(current_target, 1), 1)
@@ -3347,7 +3497,7 @@ def _write_web_log(line: str) -> None:
 # 右上角账户状态跟着显示异常。策略：
 # - 进程内缓存最近一次成功的账户信息，接口一律先回缓存；
 # - 每次 search 按返回条数本地累计（_note_quota_used），回缓存时从中转站
-#   「剩余查询」里扣掉；官方的月配额和 F 点保留账户接口的值；
+#   「剩余查询」里扣掉；「今日剩余」按成功查询次数扣减；官方额度沿用接口值；
 # - 缓存过期（成功 10 分钟 / 失败退避 1 分钟）且闲时（无导出/批量任务）
 #   才在后台刷新真实值，响应带 pending_refresh，前端每 2 秒补取，刷新完成后停止。
 _ACCOUNT_INFO_TTL = 600.0
@@ -3359,33 +3509,37 @@ _account_info_state: dict = {
     "ok": False,
     "error": "",
     "quota_mark": 0,    # 拉取该缓存时 _local_quota_used 的值
+    "query_mark": 0,    # 拉取该缓存时 _local_query_count 的值
     "client": None,     # 拉取时的 (base_url, key)，换账号即失效
     "request_id": 0,    # 只允许最后启动的拉取写入缓存
     "request_client": None,
 }
 _account_info_inflight = False
 _local_quota_used = 0  # 进程内计数；缓存存在时只累计该账号的返回条数
+_local_query_count = 0  # 成功查询次数，与返回条数分开（探测和空结果也各计一次）
 
 
 def _note_quota_used(rows: int, client: FofaClient) -> None:
-    global _local_quota_used
+    global _local_quota_used, _local_query_count
     with _account_info_lock:
         # 热切换后旧任务仍可能返回，不计入新账号的余额估算。
         cached_client = _account_info_state["client"]
         if cached_client is not None and cached_client != _account_client_signature(client):
             return
         _local_quota_used += max(int(rows), 0)
+        _local_query_count += 1
 
 
 def _reset_account_info_state() -> None:
     """清空账户信息缓存与本地计次。测试隔离用。"""
-    global _account_info_inflight, _local_quota_used
+    global _account_info_inflight, _local_quota_used, _local_query_count
     with _account_info_lock:
         _account_info_state.update(
-            data=None, fetched_at=0.0, ok=False, error="", quota_mark=0, client=None,
+            data=None, fetched_at=0.0, ok=False, error="", quota_mark=0, query_mark=0, client=None,
             request_id=_account_info_state["request_id"] + 1, request_client=None,
         )
         _local_quota_used = 0
+        _local_query_count = 0
         _account_info_inflight = False
 
 
@@ -3429,6 +3583,7 @@ def _fetch_account_info(client: FofaClient, request_id: Optional[int] = None) ->
                 ok=True,
                 error="",
                 quota_mark=_local_quota_used,
+                query_mark=_local_query_count,
                 client=signature,
             )
     return payload
@@ -3463,7 +3618,7 @@ def _start_account_info_refresh(client: FofaClient) -> bool:
 
 
 def _account_cached_payload(now: float, st: Optional[dict] = None) -> Optional[dict]:
-    """缓存载荷；中转站余额按本地返回条数扣减，官方配额沿用接口值。
+    """中转总余额按返回条数、今日余额按成功查询次数估算，官方配额沿用接口值。
 
     传入 st 快照时按快照计算：调用方先定好本次要回什么，再启动后台
     刷新，避免刷新线程抢先写回新值、漏进当次响应。
@@ -3471,16 +3626,26 @@ def _account_cached_payload(now: float, st: Optional[dict] = None) -> Optional[d
     with _account_info_lock:
         state = dict(st) if st is not None else dict(_account_info_state)
         used_total = _local_quota_used
+        query_total = _local_query_count
     if state["data"] is None:
         return None
     info = dict(state["data"])
     used = max(used_total - state["quota_mark"], 0)
+    queries_used = max(query_total - state["query_mark"], 0)
     try:
         remain_value = int(str(info.get("remain_api_query")))
     except (TypeError, ValueError):
         remain_value = None  # "N/A" 等非数值不动，只报 local_used
     if info.get("relay") and remain_value is not None and used > 0:
         info["remain_api_query"] = max(remain_value - used, 0)
+    if info.get("relay") and queries_used > 0:
+        try:
+            today_remaining = int(str(info.get("today_remaining")))
+        except (TypeError, ValueError):
+            pass  # 缺失或“不限”等非数值额度保持原样
+        else:
+            if today_remaining >= 0:
+                info["today_remaining"] = max(today_remaining - queries_used, 0)
     if used > 0:
         info["local_used"] = used
     info["info_age_seconds"] = max(int(now - state["fetched_at"]), 0)
@@ -3625,6 +3790,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
     # 鉴权豁免的 POST 集中在一处：登录/登出本身是鉴权流程的一部分。
     _GET_ROUTES = {
         "/": "_handle_index",
+        "/api/config": "_handle_config",
         "/api/info": "_handle_info",
         "/api/update": "_handle_update",
         "/api/progress": "_handle_progress",
@@ -3745,6 +3911,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
         self.send_header("Content-Length", str(size))
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         # 分块流式写回：大导出文件下载不再整读进内存
         with path.open("rb") as f:
@@ -3912,6 +4079,12 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
     def _handle_update(self, parsed=None):
         self._send_json({"success": True, "data": snapshot_update()})
 
+    def _handle_config(self, parsed=None):
+        self._send_json(
+            {"success": True, "data": self._config_status()},
+            extra_headers=[("Cache-Control", "no-store")],
+        )
+
     def _handle_info(self, parsed=None):
         client = self._current_client()
         if not client:
@@ -3997,6 +4170,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                         "unique_ips": stats.unique_ips,
                         "columns": columns,
                         "results": results,
+                        "cache_scope": _preview_cache_scope(client.base_url, client.key),
                     },
                 }
             )
@@ -4268,6 +4442,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
             all_results = []
             total_queries = len(queries)
             failed_count = 0
+            total_quota_used = 0
             cancel_check = _make_task_cancel_check(task_id)
 
             for batch_idx, query in enumerate(queries):
@@ -4302,11 +4477,13 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                             fields=fields,
                             fill_percent=fill_percent,
                             progress_callback=_create_web_batch_progress_callback(
-                                task_id, batch_idx, total_queries, base_count
+                                task_id, batch_idx, total_queries, base_count,
+                                total_quota_used,
                             ),
                             cancel_check=cancel_check,
                         )
                     all_results.extend(stats.results)
+                    total_quota_used += stats.total_quota_used
                 except FofaAPIError:
                     failed_count += 1
 
@@ -4319,6 +4496,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                         task.current_fetched = len(stats.results) if stats else 0
                         task.message = f"正在查询目标 {batch_idx + 1}/{total_queries}"
                         task.failed_count = failed_count
+                        task.total_quota_used = total_quota_used
 
                 if batch_idx < total_queries - 1:
                     # 目标间隔同样可被取消中断，补齐批量模式的取消响应
@@ -4347,6 +4525,7 @@ class FofaWebHandler(http.server.BaseHTTPRequestHandler):
                 fetched=len(all_results),
                 output_files=output_files,
                 failed_count=failed_count,
+                total_quota_used=total_quota_used,
             )
         except KeyboardInterrupt:
             with _export_lock:

@@ -410,6 +410,12 @@ class SearchUrlAndParseTest(unittest.TestCase):
         )
         self.assertEqual(stats.results[0].port, "")
 
+    def test_single_search_reports_returned_row_quota(self):
+        _, stats = self._search(
+            "host", {"error": False, "size": 100, "results": [["a.example"], ["b.example"]]}
+        )
+        self.assertEqual(stats.total_quota_used, 2)
+
 
 class SearchRetryTest(unittest.TestCase):
     def test_api_error_raised_after_non_retryable(self):
@@ -765,6 +771,63 @@ class BatchPerTargetLimitTest(unittest.TestCase):
         self.assertEqual(task.error, "")
         self.write_mock.assert_called_once()
 
+    def test_single_request_batch_accumulates_quota(self):
+        def search(query, **kwargs):
+            count = 3 if query == "host=a.com" else 2
+            return fofatoto.SearchStats(
+                results=[make_result(host=f"{query}-{i}") for i in range(count)],
+                total_quota_used=count,
+            )
+
+        self._run("batch-single-quota", 100, search_side_effect=search)
+        task = fofatoto._export_tasks["batch-single-quota"]
+        self.assertEqual(task.total_quota_used, 5)
+        self.assertEqual(task.fetched, 5)
+
+    def test_deep_batch_progress_and_final_quota_accumulate(self):
+        observed = []
+
+        def deep(query, progress_callback, **kwargs):
+            quota = 2 if query == "host=a.com" else 3
+            progress_callback({
+                "event": fofatoto.EVENT_PROGRESS,
+                "fetched": 1,
+                "target_count": 1,
+                "total_quota_used": quota,
+            })
+            observed.append(fofatoto._export_tasks["batch-deep-quota"].total_quota_used)
+            return fofatoto.SearchStats(
+                results=[make_result(host=query)], total_quota_used=quota,
+            )
+
+        self._run("batch-deep-quota", 0, deep_side_effect=deep)
+        self.assertEqual(observed, [2, 5])
+        self.assertEqual(fofatoto._export_tasks["batch-deep-quota"].total_quota_used, 5)
+
+    def test_empty_deep_target_includes_probe_quota(self):
+        def deep(query, **kwargs):
+            if query == "host=a.com":
+                return fofatoto.SearchStats(total_quota_used=1)
+            return fofatoto.SearchStats(
+                results=[make_result(host=query)], total_quota_used=2,
+            )
+
+        self._run("batch-empty-quota", 0, deep_side_effect=deep)
+        self.assertEqual(fofatoto._export_tasks["batch-empty-quota"].total_quota_used, 3)
+
+    def test_failed_target_keeps_completed_target_quota(self):
+        def search(query, **kwargs):
+            if query == "host=b.com":
+                raise fofatoto.FofaAPIError("API 错误")
+            return fofatoto.SearchStats(
+                results=[make_result(host=query)], total_quota_used=1,
+            )
+
+        self._run("batch-failed-quota", 100, search_side_effect=search)
+        task = fofatoto._export_tasks["batch-failed-quota"]
+        self.assertTrue(task.partial)
+        self.assertEqual(task.total_quota_used, 1)
+
 
 class BatchTargetNormalizeTest(unittest.TestCase):
     def _handle(self, targets):
@@ -1044,6 +1107,98 @@ class ConfigFileOptionTest(unittest.TestCase):
                     self.assertEqual(account.call_args.args[0].key, "selected-test-key")
                     server.assert_not_called()
                     self.assertEqual(single.call_count, int(mode != ["-c"]))
+
+
+class PreviewCacheContractTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.path = Path(self._tmp.name) / "config.json"
+        self.path.write_text(json.dumps({
+            "url": "https://fofa.info", "key": "cache-test-key",
+        }), encoding="utf-8")
+        self.manager = fofatoto.ConfigManager(self.path)
+
+    def _handler(self):
+        handler = fofatoto.FofaWebHandler.__new__(fofatoto.FofaWebHandler)
+        handler.config_manager = self.manager
+        handler._send_json = mock.Mock()
+        return handler
+
+    def test_cache_scope_tracks_account_without_exposing_key(self):
+        first = self.manager.public_status()
+        self.assertRegex(first["cache_scope"], r"^[0-9a-f]{64}$")
+        self.assertNotIn("cache-test-key", json.dumps(first))
+        self.assertEqual(first["cache_scope"], self.manager.public_status()["cache_scope"])
+        self.assertEqual(
+            first["cache_scope"], fofatoto._preview_cache_scope("https://fofa.info/", "cache-test-key")
+        )
+        self.path.write_text(json.dumps({
+            "url": "https://fofa.info", "key": "different-cache-test-key",
+        }), encoding="utf-8")
+        self.assertNotEqual(first["cache_scope"], self.manager.public_status()["cache_scope"])
+        self.assertNotEqual(first["cache_scope"], fofatoto._preview_cache_scope("https://relay.example", "cache-test-key"))
+
+    def test_unconfigured_account_has_no_cache_scope(self):
+        self.path.write_text(json.dumps(fofatoto.DEFAULT_CONFIG), encoding="utf-8")
+        self.assertEqual(self.manager.public_status()["cache_scope"], "")
+
+    def test_config_route_does_not_fetch_account_or_create_client(self):
+        handler = self._handler()
+        handler.path = "/api/config"
+        handler._web_auth_check = mock.Mock(return_value=False)
+        with (
+            mock.patch.object(self.manager, "get_client") as get_client,
+            mock.patch.object(fofatoto.FofaClient, "get_usage") as get_usage,
+        ):
+            handler.do_GET()
+        get_client.assert_not_called()
+        get_usage.assert_not_called()
+        payload = handler._send_json.call_args.args[0]
+        self.assertTrue(payload["success"])
+        self.assertTrue(payload["data"]["cache_scope"])
+        self.assertIn(("Cache-Control", "no-store"), handler._send_json.call_args.kwargs["extra_headers"])
+
+    def test_config_route_remains_behind_auth_gate(self):
+        self.path.write_text(json.dumps({
+            "url": "https://fofa.info", "key": "cache-test-key",
+            "web_auth": {"enabled": True, "secret": "web-secret"},
+        }), encoding="utf-8")
+        handler = self._handler()
+        handler.path = "/api/config"
+        handler.headers = {}
+        handler.do_GET()
+        self.assertEqual(handler._send_json.call_args.args[1], 401)
+        self.assertNotIn("cache_scope", json.dumps(handler._send_json.call_args.args[0]))
+
+    def test_search_response_identifies_its_actual_query_account(self):
+        handler = self._handler()
+        client = fofatoto.FofaClient("https://relay.example", "query-key")
+        client.search = mock.Mock(return_value=fofatoto.SearchStats(
+            total=1, results=[make_result(host="a.example")],
+        ))
+        handler._require_client = mock.Mock(return_value=client)
+        handler._read_body = mock.Mock(return_value={"query": "q", "fields": "host"})
+        handler._handle_search()
+        payload = handler._send_json.call_args.args[0]
+        self.assertTrue(payload["success"])
+        scope = payload["data"]["cache_scope"]
+        self.assertEqual(scope, fofatoto._preview_cache_scope(client.base_url, client.key))
+        self.assertNotEqual(scope, self.manager.public_status()["cache_scope"])
+        self.assertNotIn(client.key, json.dumps(payload))
+
+    def test_download_does_not_enter_browser_http_cache(self):
+        handler = self._handler()
+        handler.send_response = mock.Mock()
+        handler.send_header = mock.Mock()
+        handler.end_headers = mock.Mock()
+        handler.wfile = io.BytesIO()
+        output = Path(self._tmp.name) / "export.json"
+        output.write_bytes(b'[{"host":"a.example"}]')
+        handler._send_file(output, output.name)
+        handler.send_header.assert_any_call("Cache-Control", "no-store")
+        handler.send_header.assert_any_call("Content-Length", str(output.stat().st_size))
+        self.assertEqual(handler.wfile.getvalue(), output.read_bytes())
 
 
 class PlaceholderKeyTest(unittest.TestCase):
@@ -3833,6 +3988,85 @@ class AccountInfoCacheTest(unittest.TestCase):
         self.assertEqual(d["local_used"], 30)
         self.assertFalse(d["pending_refresh"])
 
+    def test_relay_daily_remaining_counts_queries_instead_of_rows(self):
+        client, calls = self._client([
+            dict(self.USAGE, relay=True, remain_api_query="不限", today_remaining=100)
+        ])
+        handler = self._handler(client)
+        handler._handle_info()
+        fofatoto._note_quota_used(30, client)
+        fofatoto._note_quota_used(0, client)
+        handler._handle_info()
+        data = self._served(handler)
+        self.assertEqual(data["today_remaining"], 98)
+        self.assertEqual(data["remain_api_query"], "不限")
+        self.assertEqual(data["local_used"], 30)
+        self.assertEqual(len(calls), 1)
+
+    def test_relay_daily_remaining_counts_retry_success_once(self):
+        client = fofatoto.FofaClient("https://fafaapi.info", "test-key")
+        handler = self._handler(client)
+        usage = dict(self.USAGE, relay=True, today_remaining=100)
+        responses = [
+            urllib.error.HTTPError("https://fafaapi.info/", 429, "Too Many Requests", {}, None),
+            FakeResponse({"error": False, "size": 2, "results": [["a.example"], ["b.example"]]}),
+        ]
+        with (
+            mock.patch.object(client, "get_usage", return_value=usage),
+            mock.patch.object(urllib.request, "urlopen", side_effect=responses) as urlopen,
+            mock.patch.object(fofatoto, "_sleep_interruptible"),
+        ):
+            handler._handle_info()
+            client.search("q", fields="host")
+            handler._handle_info()
+        self.assertEqual(urlopen.call_count, 2)
+        self.assertEqual(self._served(handler)["today_remaining"], 99)
+        self.assertEqual(self._served(handler)["remain_api_query"], 98)
+
+    def test_failed_search_does_not_decrement_daily_remaining(self):
+        client = fofatoto.FofaClient("https://fafaapi.info", "test-key")
+        handler = self._handler(client)
+        with (
+            mock.patch.object(client, "get_usage", return_value=dict(self.USAGE, relay=True, today_remaining=100)),
+            mock.patch.object(urllib.request, "urlopen", return_value=FakeResponse({
+                "error": True, "errmsg": "[-700] Invalid key",
+            })),
+        ):
+            handler._handle_info()
+            with self.assertRaises(fofatoto.FofaAPIError):
+                client.search("q", fields="host")
+            handler._handle_info()
+        self.assertEqual(self._served(handler)["today_remaining"], 100)
+
+    def test_daily_remaining_refresh_resets_local_estimate(self):
+        client, _ = self._client([
+            dict(self.USAGE, relay=True, today_remaining=100),
+            dict(self.USAGE, relay=True, today_remaining=97),
+        ])
+        handler = self._handler(client)
+        handler._handle_info()
+        fofatoto._note_quota_used(20, client)
+        handler._handle_info()
+        self.assertEqual(self._served(handler)["today_remaining"], 99)
+        fofatoto._fetch_account_info(client)
+        handler._handle_info()
+        self.assertEqual(self._served(handler)["today_remaining"], 97)
+        fofatoto._note_quota_used(2, client)
+        handler._handle_info()
+        self.assertEqual(self._served(handler)["today_remaining"], 96)
+
+    def test_daily_remaining_preserves_unavailable_values_and_clamps_zero(self):
+        for value, expected in ((None, None), ("不限", "不限"), (-1, -1), ("0", 0), (1, 0)):
+            with self.subTest(value=value):
+                fofatoto._reset_account_info_state()
+                client, _ = self._client([dict(self.USAGE, relay=True, today_remaining=value)])
+                handler = self._handler(client)
+                handler._handle_info()
+                fofatoto._note_quota_used(10, client)
+                fofatoto._note_quota_used(10, client)
+                handler._handle_info()
+                self.assertEqual(self._served(handler)["today_remaining"], expected)
+
     def test_official_negative_limits_are_not_changed_by_local_usage(self):
         usage = dict(
             self.USAGE, remain_api_query=-1, remain_api_data=-1,
@@ -4055,7 +4289,7 @@ class AccountInfoCacheTest(unittest.TestCase):
                                 raise TimeoutError("test query was not released")
                             return FakeResponse({"error": False, "size": 2, "results": [["a.example"], ["b.example"]]})
                         return FakeResponse({"error": False, "size": 1, "results": [["c.example"]]})
-                    return FakeResponse({"valid": True, "totalRemaining": 100})
+                    return FakeResponse({"valid": True, "totalRemaining": 100, "todayRemaining": 100})
 
                 with mock.patch.object(urllib.request, "urlopen", side_effect=urlopen):
                     handler._handle_info()
@@ -4074,11 +4308,13 @@ class AccountInfoCacheTest(unittest.TestCase):
                         handler._handle_info()
                         d = self._served(handler)
                         self.assertEqual(d["remain_api_query"], 100)
+                        self.assertEqual(d["today_remaining"], 100)
                         self.assertNotIn("local_used", d)
 
                         handler.config_manager.get_client().search("q", size=1, fields="host", max_retries=1)
                         handler._handle_info()
                         self.assertEqual(self._served(handler)["remain_api_query"], 99)
+                        self.assertEqual(self._served(handler)["today_remaining"], 99)
                         self.assertEqual(self._served(handler)["local_used"], 1)
                     finally:
                         release.set()
