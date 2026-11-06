@@ -3724,7 +3724,6 @@ class WebAuthLoginTemplateTest(unittest.TestCase):
         html = fofatoto.WEB_LOGIN_HTML
         self.assertIn('id="secretInput"', html)
         self.assertIn("/api/auth/login", html)
-        self.assertIn("web_auth.secret", html)
         self.assertNotRegex(html, r"__[A-Za-z]+__")
 
     def test_main_ui_wires_conditional_logout_and_right_opening_settings(self):

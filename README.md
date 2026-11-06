@@ -1,10 +1,10 @@
 # fofatoto
 
-> 轻量级 FOFA 网络空间资产查询工具：命令行 + 本地 Web UI，支持全量导出、批量查询、字段定制、智能去重与多格式输出，零第三方依赖。
+> 轻量级 FOFA 网络空间资产查询工具：命令行 + 本地 Web UI，支持深度导出、批量查询、字段定制、智能去重与多格式输出，零第三方依赖。
 
 [快速开始](#快速开始) · [功能展示](#功能展示) · [Web UI](#web-ui-模式) · [CLI 用法](#cli-基本用法) · [命令行参数](#命令行参数)
 
-![FOFATOTO v1.10.0 即时预览：查询输入、字段 chip、账户状态、资产表格与多格式导出](https://github.com/keyblues/fofatoto/releases/download/readme-media/01-instant-preview.jpg)
+![FOFATOTO v1.10.0 即时预览：查询输入、字段 chip、账户状态、资产表格与多格式导出](https://github.com/user-attachments/assets/caab6885-c7da-48e1-b6e3-fe3cd5a92cfa)
 
 *Web UI 即时预览界面，使用演示账号和示例数据。*
 
@@ -13,7 +13,7 @@
 - **零依赖** — 仅使用 Python 标准库，Python ≥ 3.11，无需安装任何第三方包
 - **双入口** — 命令行（CLI）+ 本地 Web UI（即时预览 / 深度导出 / 批量模式），Windows 双击二进制即可打开 Web UI
 - **浏览器查询缓存** — 即时预览重复查询直接复用 IndexedDB 中的结果，支持强制重新查询、手动清空、24 小时过期与容量自动淘汰；深度与批量导出不写浏览器缓存
-- **全量导出** — 突破 FOFA 单次 10000 条限制，`before` 时间游标分批拉取，遇到限流/超时自动放慢节奏
+- **深度导出** — 突破 FOFA 单次 10000 条限制，`before` 时间游标分批拉取，**账户额度内不消耗 F 点**；遇到限流/超时自动放慢节奏
 - **批量查询** — 从文件读取多个目标，支持占位符替换，逐条执行并合并导出
 - **Icon 同款查询** — 输入网站自动抓取 favicon 计算 `icon_hash`，一键查询使用相同图标的同框架/同产品网站，CLI 与 Web UI 均支持
 - **字段定制** — CLI `-f` 指定返回字段；Web UI 字段 chip 支持搜索、增删与拖拽排序
@@ -34,7 +34,7 @@
 
 点击字段行的「+」打开选取器，按核心、服务、位置、网络等分组选择字段，也可搜索字段名。已选字段显示为 chip，可删除或拖拽调整顺序；拖入查询框还能插入对应的查询条件。详见[字段定制](#字段定制)。
 
-![字段选取器按核心、服务、位置、网络和证书分组展示字段，已选项高亮](https://github.com/keyblues/fofatoto/releases/download/readme-media/02-field-selector.jpg)
+![字段选取器按核心、服务、位置、网络和证书分组展示字段，已选项高亮](https://github.com/user-attachments/assets/1f429a22-2091-42c2-835d-9055addba80e)
 
 </details>
 
@@ -43,7 +43,7 @@
 
 相同查询、字段、数量、数据范围和账号可复用浏览器中的结果。命中后显示命中率与「重新查询」入口；设置面板中可查看缓存条数、占用和累计命中统计，也可关闭或清空缓存。缓存命中不会发送 FOFA 搜索请求，主动重新查询会使用查询额度。
 
-![查询缓存命中提示、重新查询按钮，以及设置中的缓存开关、占用、命中率和清空入口](https://github.com/keyblues/fofatoto/releases/download/readme-media/03-query-cache.jpg)
+![查询缓存命中提示、重新查询按钮，以及设置中的缓存开关、占用、命中率和清空入口](https://github.com/user-attachments/assets/85c05558-9d7d-43b1-9cb2-d6806c82b410)
 
 </details>
 
@@ -52,16 +52,16 @@
 
 点击「不看」再点选单元格，可从当前表格排除该值，并通过红色 chip 随时恢复；点击「选取查询」再点选单元格，则把 `字段="值"` 追加到查询框。图中将 `server` 加入查询，并在本地排除了 `protocol="http"`，FOFA 总计仍保留原值。
 
-![点选 server 生成查询条件，同时用不看 chip 排除 HTTP 结果，表格显示过滤后的统计](https://github.com/keyblues/fofatoto/releases/download/readme-media/04-filter-and-query.jpg)
+![点选 server 生成查询条件，同时用不看 chip 排除 HTTP 结果，表格显示过滤后的统计](https://github.com/user-attachments/assets/53ec3aa4-8207-4da9-8641-32f42671f7cf)
 
 </details>
 
 <details>
 <summary><strong>深度导出：时间游标分批拉取，实时查看进度与配额</strong></summary>
 
-切换到「深度导出」，设置覆盖率、导出上限及数据范围后启动任务。进度面板显示已获取数量、目标、总匹配、配额和耗时；完成后可下载 CSV / JSON / TXT，取消时可选择保留已获取的数据。详见[全量导出](#全量导出)。
+切换到「深度导出」，设置覆盖率、导出上限及数据范围后启动任务，**账户额度内不消耗 F 点**。面板展示进度、目标、配额和耗时，完成后下载 CSV / JSON / TXT；取消时可保留已获取的数据。详见[深度导出](#深度导出)。
 
-![深度导出进行中：62.5% 进度、已获取数量、目标、总匹配、配额、耗时与取消入口](https://github.com/keyblues/fofatoto/releases/download/readme-media/05-deep-export.jpg)
+![深度导出进行中：62.5% 进度、已获取数量、目标、总匹配、配额、耗时与取消入口](https://github.com/user-attachments/assets/ac39fbd7-b175-4b50-b3b3-061258b30d86)
 
 </details>
 
@@ -70,7 +70,7 @@
 
 用 `domain="{}"` 作为基础查询，每行填写一个目标，程序自动替换占位符并逐个查询。可限制每个目标的导出条数，空行和 `#` 注释会跳过；完成后从同一面板下载合并结果。详见[批量查询](#批量查询)。
 
-![三个示例域名的批量任务已完成，展示每目标上限、累计结果及 CSV、JSON、TXT 下载按钮](https://github.com/keyblues/fofatoto/releases/download/readme-media/06-batch-export.jpg)
+![三个示例域名的批量任务已完成，展示每目标上限、累计结果及 CSV、JSON、TXT 下载按钮](https://github.com/user-attachments/assets/55c40044-d9e6-4ab3-836f-a8417cd8b568)
 
 </details>
 
@@ -79,7 +79,7 @@
 
 点击「Icon 提取」并输入网站地址，提取成功后将 `icon_hash` 条件填入查询框，再搜索使用相同图标的网站；也可继续追加端口、域名等条件。CLI 同样支持网址、本地图标文件和已知 hash，详见[Icon 同款查询](#icon-同款查询)。
 
-![Icon Hash 提取弹窗：输入网站地址后点击提取并填入，将图标 hash 用于查询](https://github.com/keyblues/fofatoto/releases/download/readme-media/07-icon-lookup.jpg)
+![Icon Hash 提取弹窗：输入网站地址后点击提取并填入，将图标 hash 用于查询](https://github.com/user-attachments/assets/0578da5c-a0f6-4925-aba2-4c20a80c757b)
 
 </details>
 
@@ -199,7 +199,7 @@ Web UI 提供三种模式：
 }
 ```
 
-![开启 web_auth 后的中文登录页：输入配置中的访问密钥登录 Web UI](https://github.com/keyblues/fofatoto/releases/download/readme-media/08-web-auth.jpg)
+![开启 web_auth 后的中文登录页：输入配置中的访问密钥登录 Web UI](https://github.com/user-attachments/assets/13802d76-2cda-4bd0-9046-9d791c4f6391)
 
 开启后的行为：
 
@@ -236,9 +236,11 @@ Web UI 提供三种模式：
 
 未指定导出格式时默认输出 CSV；未指定输出文件名时自动生成 `fofa_results_YYYYMMDD_HHMMSS.csv`（后缀跟随格式）。
 
-### 全量导出
+### 深度导出
 
-将 `-l` 设为大于 10000 的值或 `max` 即可启用深度抓取，按 `before` 时间游标自动拉取匹配结果：
+将 `-l` 设为大于 10000 的值或 `max` 即可启用深度导出，通过普通查询接口按 `before` 时间游标分批获取匹配结果。
+
+**在账户查询／数据额度内，深度导出不消耗 F 点**；每次请求仍计入查询次数和获取数据量。额度用尽后，继续查询或导出可能使用 F 点，详见 [FOFA 官方说明](https://fofa.info/vip)。
 
 ```bash
 # 导出前 50000 条
@@ -251,7 +253,7 @@ Web UI 提供三种模式：
 ./fofatoto "domain=baidu.com" -l max --fill 0.9 -o cover90.csv
 ```
 
-深度抓取工作流程：
+深度导出工作流程：
 
 1. 先用 `size=1` 探测总匹配数
 2. 按 `before` 时间递进，每批最多拉取 10000 条
