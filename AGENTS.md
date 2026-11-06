@@ -86,7 +86,7 @@ Account quota units remain distinct: `_local_quota_used` counts returned rows fo
 
 ## Version sync
 
-`APP_VERSION` (fofatoto.py:42) is the source of truth and always reflects the last **released** version. Unreleased changes go under a `## Unreleased` heading in `CHANGELOG.md` — never invent a version number for unpublished work. Only at release time: pick the version, rename the heading to `## vX.Y.Z - YYYY-MM-DD`, and update all three together:
+`APP_VERSION` (fofatoto.py:42) is the source of truth for the current project version, including an explicitly prepared release. If a version entry is prepared but not yet published, add related changes to its existing categories in `CHANGELOG.md`; use `## Unreleased` only when there is no prepared release entry. Never invent a version number for unpublished work. When preparing a release: pick the version, rename the heading to `## vX.Y.Z - YYYY-MM-DD`, and update all three together:
 - `APP_VERSION` in fofatoto.py
 - `pyproject.toml` `version` field
 - `uv.lock` package version

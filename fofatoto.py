@@ -3760,18 +3760,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Micr
 .btn{display:block;width:100%;margin-top:16px;padding:9px 20px;font-size:13px;font-weight:600;border:1px solid var(--accent);border-radius:2px;cursor:pointer;background:var(--accent);color:#fff;transition:all 0.15s ease}
 .btn:hover{background:var(--accent-hover)}
 .btn:disabled{opacity:.65;cursor:not-allowed}
-.login-hint{font-size:11px;color:var(--text-secondary);margin-top:18px;text-align:center}
-.login-hint code{background:#f1f5f9;padding:1px 5px;border-radius:2px;font-family:"SF Mono","Fira Code",Consolas,Monaco,monospace;font-size:11px}
 </style>
 </head>
 <body>
 <div class="login-card">
 <div class="login-title">FOFATOTO</div>
-<div class="login-sub">Web UI 已开启访问鉴权，请输入访问密钥</div>
+<div class="login-sub">请输入访问密钥</div>
 <input type="password" class="login-input" id="secretInput" placeholder="访问密钥" autocomplete="off">
 <div class="login-error" id="loginError"></div>
 <button class="btn" id="loginBtn" onclick="submitLogin()">登录</button>
-<div class="login-hint">密钥在配置文件 <code>config.json</code> 的 <code>web_auth.secret</code> 中设置</div>
 </div>
 <script>
 function submitLogin(){var inp=document.getElementById("secretInput"),btn=document.getElementById("loginBtn"),err=document.getElementById("loginError"),v=inp.value;if(!v){err.textContent="请输入访问密钥";err.style.display="block";return}btn.disabled=true;btn.textContent="验证中...";err.style.display="none";fetch("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({secret:v})}).then(function(r){return r.json()}).then(function(data){if(data.success){location.href="/"}else{btn.disabled=false;btn.textContent="登录";err.textContent=data.error||"密钥错误";err.style.display="block";inp.select()}}).catch(function(e){btn.disabled=false;btn.textContent="登录";err.textContent="网络错误: "+e.message;err.style.display="block"})}
