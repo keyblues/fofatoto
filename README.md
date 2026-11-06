@@ -1,5 +1,12 @@
 # fofatoto
 
+[![Stars](https://img.shields.io/github/stars/keyblues/fofatoto?style=flat&logo=github&label=Stars)](https://github.com/keyblues/fofatoto/stargazers)
+[![Release](https://img.shields.io/github/v/release/keyblues/fofatoto?label=Release)](https://github.com/keyblues/fofatoto/releases/latest)
+[![License](https://img.shields.io/github/license/keyblues/fofatoto?label=License)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](#从源码运行)
+[![Dependencies 0](https://img.shields.io/badge/Dependencies-0-2ea44f)](pyproject.toml)
+[![Windows / Linux / macOS](https://img.shields.io/badge/Platforms-Windows%20%7C%20Linux%20%7C%20macOS-64748b)](https://github.com/keyblues/fofatoto/releases/latest)
+
 > 轻量级 FOFA 网络空间资产查询工具：命令行 + 本地 Web UI，支持深度导出、批量查询、字段定制、智能去重与多格式输出，零第三方依赖。
 
 [快速开始](#快速开始) · [功能展示](#功能展示) · [Web UI](#web-ui-模式) · [CLI 用法](#cli-基本用法) · [命令行参数](#命令行参数)
