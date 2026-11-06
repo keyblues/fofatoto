@@ -91,7 +91,7 @@ Account quota units remain distinct: `_local_quota_used` counts returned rows fo
 - `pyproject.toml` `version` field
 - `uv.lock` package version
 
-Currently all three are synced at `1.10.0` for release preparation (`CHANGELOG.md`: v1.10.0, 2026-11-05). The latest published release remains v1.9.0 (2026-10-16) until v1.10.0 is tagged.
+All three version fields are synced at `1.10.0` (`CHANGELOG.md`: v1.10.0, 2026-11-06).
 
 ## Branch and changelog rules
 
