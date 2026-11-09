@@ -2,6 +2,7 @@
 
 [![Stars](https://img.shields.io/github/stars/keyblues/fofatoto?style=flat&logo=github&label=Stars)](https://github.com/keyblues/fofatoto/stargazers)
 [![Release](https://img.shields.io/github/v/release/keyblues/fofatoto?label=Release)](https://github.com/keyblues/fofatoto/releases/latest)
+[![Total Downloads](https://img.shields.io/github/downloads/keyblues/fofatoto/total?label=Downloads)](https://github.com/keyblues/fofatoto/releases)
 [![License](https://img.shields.io/github/license/keyblues/fofatoto?label=License)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](#从源码运行)
 [![Dependencies 0](https://img.shields.io/badge/Dependencies-0-2ea44f)](pyproject.toml)
